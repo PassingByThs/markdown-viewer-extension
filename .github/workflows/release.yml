@@ -62,6 +62,11 @@ concurrency:
 
 env:
   NODE_VERSION: '22'
+  # `gh` resolves the repository from the git remote it finds in the workspace,
+  # which the publish job does not check out — without this it fails with
+  # "failed to run git: fatal: not a git repository". Passing the repository
+  # explicitly keeps every gh call working in jobs that only touch the API.
+  GH_REPO: ${{ github.repository }}
 
 jobs:
   prepare:
@@ -546,6 +551,8 @@ jobs:
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # No checkout on purpose: this job only talks to the Releases API, and
+    # GH_REPO (workflow env) tells gh which repository that is.
     steps:
       - name: Check every asset is in place
         env:
