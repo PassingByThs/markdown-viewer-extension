@@ -1,4 +1,4 @@
-import 'package:ant_icons/ant_icons.dart';
+import '../ant_icons.dart';
 import 'package:flutter/material.dart';
 
 /// Shared, Material 3 based UI building blocks used across the app.

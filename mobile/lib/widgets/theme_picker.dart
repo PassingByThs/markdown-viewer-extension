@@ -1,4 +1,4 @@
-import 'package:ant_icons/ant_icons.dart';
+import '../ant_icons.dart';
 import 'package:flutter/material.dart';
 import '../models/theme_info.dart';
 import '../services/localization_service.dart';
