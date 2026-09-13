@@ -1,0 +1,628 @@
+# Release — build every platform for a version tag and attach the installers to
+# the matching GitHub Release.
+#
+# Trigger: push a tag named `v<version>` (e.g. `v5.3.0`), or run this workflow
+# manually with the tag name to rebuild a release.
+#
+# Assets on the `v5.3.0` release:
+#   chrome-v5.3.0.zip       Chrome Web Store package
+#   edge-v5.3.0.zip         Edge Add-ons package
+#   firefox-v5.3.0.zip      Firefox Add-ons package
+#   vscode-v5.3.0.vsix      VS Code Marketplace / Open VSX package
+#   obsidian-v5.3.0.zip     Obsidian plugin bundle
+#   documd-cli-v5.3.0.tgz   npm tarball of the headless HTML CLI (needs Node 24+)
+#   android-v5.3.0.apk      Flutter Android app (plus .aab when signing secrets exist)
+#   main.js / manifest.json / styles.css   Obsidian release files, unpacked
+#
+# Obsidian compatibility: Obsidian resolves plugin updates through
+# `releases/download/<manifest.version>/main.js` and reads the manifest from
+# `releases/latest/download/manifest.json`. It therefore needs a release whose
+# tag is the bare version (`5.3.0`) and which carries the Latest marker, so this
+# workflow also creates that tag on the same commit and publishes a small
+# release there holding only the three plugin files. The `v5.3.0` release is
+# published explicitly *without* the Latest marker. Prerelease tags
+# (`v5.3.0-beta.1`) skip that Obsidian release, so betas never reach users.
+#
+# Both releases are created as DRAFTS and only published after every build job
+# succeeded, so a failed build never leaves an incomplete public release.
+# Re-running the workflow (or the failed jobs) is safe: builds overwrite assets
+# with `gh release upload --clobber` and release edits are idempotent.
+#
+# Tag rules: the tag must be `v<package.json version>`. Every build script syncs
+# its manifest version from package.json, and the Obsidian files must match the
+# tag, so bump `version` in package.json, commit, then tag.
+#
+# Not covered here: iOS/macOS builds (need a macOS runner plus Apple
+# certificates), store submissions (Chrome Web Store, AMO, marketplaces), and
+# the test suite (ci.yml already runs it on every push to main).
+#
+# See .github/README.md for the release checklist and the list of builds that
+# silently degrade when their Slidev assets are missing.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to rebuild and publish, e.g. v5.3.0 (the tag must already exist)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+# A release is never cancelled halfway through.
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  prepare:
+    name: Validate tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Check the tag matches package.json
+        id: meta
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Tag '$tag' must look like v<major>.<minor>.<patch>, for example v5.3.0."
+            exit 1
+          fi
+
+          version="${tag#v}"
+          package_version="$(node -p 'require("./package.json").version')"
+          if [[ "$version" != "$package_version" ]]; then
+            echo "::error::Tag '$tag' does not match package.json version '$package_version'."
+            echo "Bump \"version\" in package.json and commit that change before tagging."
+            exit 1
+          fi
+
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Release $tag"
+            echo ""
+            echo "- version: \`$version\`"
+            echo "- prerelease: \`$prerelease\`"
+            echo "- commit: \`$(git rev-parse HEAD)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Obsidian downloads plugin files from `releases/download/<version>/…`, so
+      # a release tagged with the bare version has to exist. Stable releases
+      # only: a beta would otherwise be picked up by every Obsidian user.
+      - name: Create the bare-version tag for the Obsidian release
+        if: steps.meta.outputs.prerelease == 'false'
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+          head_sha="$(git rev-parse HEAD)"
+
+          existing="$(git ls-remote --tags origin "refs/tags/$version")"
+          if [[ -n "$existing" ]]; then
+            echo "Tag $version already exists — leaving it untouched."
+            exit 0
+          fi
+
+          git tag "$version" "$head_sha"
+          git push origin "refs/tags/$version"
+          echo "Created tag $version on $head_sha."
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.tag }}"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists — uploading into it and leaving its state untouched."
+            exit 0
+          fi
+
+          gh release create "$tag" --title "$tag" --generate-notes --draft --verify-tag
+          echo "Created draft release $tag."
+
+  extensions:
+    name: ${{ matrix.platform }} package
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: chrome
+            build: npm run build:chrome
+          - platform: edge
+            build: npm run build:edge
+          - platform: firefox
+            build: npm run build:firefox
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # No `cache: npm`: package-lock.json is gitignored, so there is no lock
+      # file for setup-node to hash and dependencies resolve fresh every run.
+      - name: Install dependencies
+        run: npm install
+
+      # The build scripts shell out to `zip`; the Edge build validates the
+      # archive with `zipinfo`. Both come from the runner image — installed here
+      # only in case a future image drops them.
+      - name: Ensure zip tooling
+        run: |
+          set -euo pipefail
+          if ! command -v zip >/dev/null || ! command -v zipinfo >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y zip unzip
+          fi
+          zip -v >/dev/null
+
+      - name: Build ${{ matrix.platform }} extension
+        run: ${{ matrix.build }}
+
+      - name: Verify the package
+        run: |
+          set -euo pipefail
+          zip_file="dist/${{ matrix.platform }}-v${{ needs.prepare.outputs.version }}.zip"
+
+          test -f "$zip_file"
+          names="$(unzip -Z1 "$zip_file")"
+          grep -qxF 'manifest.json' <<< "$names"
+          # The Slidev shell is assembled from dist/slidev-shell + dist/themes;
+          # the build scripts only warn when those are missing, so assert that
+          # the packages really carry them.
+          grep -qxF 'slidev-shell/themes/themes.json' <<< "$names"
+          ls -lh "$zip_file"
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ needs.prepare.outputs.tag }}" \
+            "dist/${{ matrix.platform }}-v${{ needs.prepare.outputs.version }}.zip" --clobber
+
+  vscode:
+    name: VS Code extension
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm install
+
+      # The webview embeds dist/slidev-shell-vscode and dist/themes. Without
+      # them the extension still builds, but silently ships without Slidev
+      # support, so they are built first and verified below.
+      - name: Build Slidev shell assets
+        run: |
+          set -euo pipefail
+          npm run build:slidev
+          npx tsx slidev-shell/build-themes.ts
+          test -f dist/slidev-shell-vscode/slidev-shell.js
+          test -f dist/themes/themes.json
+
+      - name: Build the VSIX
+        run: npm run build:vscode
+
+      - name: Verify the VSIX
+        run: |
+          set -euo pipefail
+          version="${{ needs.prepare.outputs.version }}"
+          vsix="$(ls dist/vscode/*.vsix)"
+
+          names="$(unzip -Z1 "$vsix")"
+          grep -q 'webview/slidev-shell-inline.html$' <<< "$names"
+          grep -q 'webview/slidev-theme-bundles.json$' <<< "$names"
+
+          mv "$vsix" "dist/vscode-v${version}.vsix"
+          ls -lh "dist/vscode-v${version}.vsix"
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ needs.prepare.outputs.tag }}" \
+            "dist/vscode-v${{ needs.prepare.outputs.version }}.vsix" --clobber
+
+  obsidian:
+    name: Obsidian plugin
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm install
+
+      # The plugin embeds two artifacts that only a VS Code build produces
+      # (dist/vscode/webview/slidev-shell-inline.html and
+      # slidev-theme-bundles.json). The plugin build skips them silently when
+      # they are missing, which would ship an Obsidian release without Slidev
+      # support, so they are built first and the copies are asserted below.
+      - name: Build the Slidev assets the plugin embeds
+        run: |
+          set -euo pipefail
+          npm run build:slidev
+          npx tsx slidev-shell/build-themes.ts
+          npm run build:vscode
+          test -f dist/vscode/webview/slidev-shell-inline.html
+          test -f dist/vscode/webview/slidev-theme-bundles.json
+
+      - name: Build the plugin
+        run: |
+          set -euo pipefail
+          npm run build:obsidian | tee "$RUNNER_TEMP/obsidian-build.log"
+          grep -q 'slidev-shell-inline.html' "$RUNNER_TEMP/obsidian-build.log"
+          grep -q 'slidev-theme-bundles.json' "$RUNNER_TEMP/obsidian-build.log"
+
+      - name: Verify the plugin
+        run: |
+          set -euo pipefail
+          version="${{ needs.prepare.outputs.version }}"
+          manifest_version="$(node -p 'require("./dist/obsidian/manifest.json").version')"
+
+          if [[ "$manifest_version" != "$version" ]]; then
+            echo "::error::dist/obsidian/manifest.json says $manifest_version but the tag is v$version."
+            exit 1
+          fi
+
+          for file in main.js manifest.json styles.css; do
+            test -f "dist/obsidian/$file"
+          done
+
+          # The Slidev shell HTML is inlined into main.js; this marker exists
+          # only in that file (see the nonce in vscode/build.js).
+          if ! grep -q '__SLIDEV_NONCE__' dist/obsidian/main.js; then
+            echo "::error::dist/obsidian/main.js does not embed the Slidev shell."
+            exit 1
+          fi
+
+      - name: Package the plugin
+        run: |
+          set -euo pipefail
+          cd dist/obsidian
+          zip -r "../obsidian-v${{ needs.prepare.outputs.version }}.zip" .
+
+      - name: Upload to the v-prefixed release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ needs.prepare.outputs.tag }}" \
+            dist/obsidian/main.js \
+            dist/obsidian/manifest.json \
+            dist/obsidian/styles.css \
+            "dist/obsidian-v${{ needs.prepare.outputs.version }}.zip" \
+            --clobber
+
+      - name: Create the draft Obsidian release
+        if: needs.prepare.outputs.prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.prepare.outputs.version }}"
+          tag="${{ needs.prepare.outputs.tag }}"
+
+          if gh release view "$version" >/dev/null 2>&1; then
+            echo "Release $version already exists — uploading into it and leaving its state untouched."
+            exit 0
+          fi
+
+          gh release create "$version" --title "$version" --draft --verify-tag \
+            --notes "Obsidian community plugin release for version ${version}. Plugin files (main.js, manifest.json, styles.css) built from the ${tag} release, which also carries the browser extensions, the VS Code extension, the HTML CLI and the Android app."
+
+      - name: Upload the plugin files to the Obsidian release
+        if: needs.prepare.outputs.prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ needs.prepare.outputs.version }}" \
+            dist/obsidian/main.js \
+            dist/obsidian/manifest.json \
+            dist/obsidian/styles.css \
+            --clobber
+
+  cli:
+    name: HTML CLI package
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm install
+
+      # `npm pack` would run the `prepack` hook (build:cli) a second time, so
+      # scripts are skipped after building the CLI explicitly.
+      - name: Build the CLI and pack the npm tarball
+        run: |
+          set -euo pipefail
+          npm run build:cli
+          npm pack --ignore-scripts --pack-destination dist
+          mv dist/markdown-viewer-extension-*.tgz "dist/documd-cli-v${{ needs.prepare.outputs.version }}.tgz"
+          ls -lh "dist/documd-cli-v${{ needs.prepare.outputs.version }}.tgz"
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ needs.prepare.outputs.tag }}" \
+            "dist/documd-cli-v${{ needs.prepare.outputs.version }}.tgz" --clobber
+
+  android:
+    name: Android app
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17' # mobile/android/app/build.gradle.kts compiles for Java 17
+
+      # Flutter floats like the rest of the dependency tree (pubspec.lock is
+      # gitignored). If a stable bump ever breaks the app build, pin the version
+      # the app was last released with, e.g. `flutter-version: '3.38.5'`.
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # The runner image ships toolchains this job never touches; freeing them
+      # keeps room for the Flutter SDK, Gradle, and the Android build.
+      - name: Reclaim disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/haskell" || true
+          sudo rm -rf "${ANDROID_HOME:-/usr/local/lib/android/sdk}/system-images" \
+                      "${ANDROID_HOME:-/usr/local/lib/android/sdk}/emulator" || true
+          df -h /
+
+      # Optional: without the keystore the release APK is debug-signed (fine for
+      # side-loading, rejected by the Play Store) and the AAB is skipped, which
+      # matches what `mobile/build-app.js android` does locally.
+      - name: Configure Android release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
+            echo "::notice::ANDROID_KEYSTORE_BASE64 is not set — building a debug-signed release APK and skipping the AAB."
+            exit 0
+          fi
+          : "${ANDROID_KEYSTORE_PASSWORD:?ANDROID_KEYSTORE_PASSWORD is required when the keystore is set}"
+          : "${ANDROID_KEY_ALIAS:?ANDROID_KEY_ALIAS is required when the keystore is set}"
+          : "${ANDROID_KEY_PASSWORD:?ANDROID_KEY_PASSWORD is required when the keystore is set}"
+
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > mobile/android/markdown_viewer.keystore
+          {
+            echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+            echo "keyPassword=$ANDROID_KEY_PASSWORD"
+            echo "keyAlias=$ANDROID_KEY_ALIAS"
+            echo "storeFile=markdown_viewer.keystore"
+          } > mobile/android/key.properties
+          echo "Release signing configured."
+
+      # mobile/pubspec.lock is gitignored, so dependency versions resolve here.
+      - name: Fetch Flutter dependencies
+        working-directory: mobile
+        run: flutter pub get
+
+      # The Flutter app bundles the same webview assets as the other platforms
+      # (mobile/build/mobile), which in turn need the Slidev shell bundles.
+      - name: Build the webview assets
+        run: |
+          set -euo pipefail
+          npm run build:slidev
+          npx tsx slidev-shell/build-themes.ts
+          npm run build:mobile
+          test -f mobile/build/mobile/bundle.js
+          test -f mobile/build/mobile/slidev-shell-inline.html
+
+      - name: Build the Android app
+        run: node mobile/build-app.js android
+
+      - name: Collect the artifacts
+        run: |
+          set -euo pipefail
+          version="${{ needs.prepare.outputs.version }}"
+
+          apk="$(find dist/android -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$apk"
+          mv "$apk" "dist/android-v${version}.apk"
+
+          aab="$(find dist/android -maxdepth 1 -name '*.aab' -print -quit)"
+          if [[ -n "$aab" ]]; then
+            mv "$aab" "dist/android-v${version}.aab"
+          fi
+
+          ls -lh "dist/android-v${version}."*
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.prepare.outputs.version }}"
+          tag="${{ needs.prepare.outputs.tag }}"
+
+          gh release upload "$tag" "dist/android-v${version}.apk" --clobber
+          if [[ -f "dist/android-v${version}.aab" ]]; then
+            gh release upload "$tag" "dist/android-v${version}.aab" --clobber
+          fi
+
+  publish:
+    name: Publish the releases
+    needs: [prepare, extensions, vscode, obsidian, cli, android]
+    # Every build job must have finished successfully — a half-filled release
+    # must never go public.
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check every asset is in place
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.prepare.outputs.tag }}"
+          version="${{ needs.prepare.outputs.version }}"
+          prerelease="${{ needs.prepare.outputs.prerelease }}"
+
+          expected="
+          chrome-v${version}.zip
+          edge-v${version}.zip
+          firefox-v${version}.zip
+          vscode-v${version}.vsix
+          obsidian-v${version}.zip
+          documd-cli-v${version}.tgz
+          android-v${version}.apk
+          main.js
+          manifest.json
+          styles.css
+          "
+
+          assets="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+          missing=""
+          for file in $expected; do
+            grep -qxF "$file" <<< "$assets" || missing="${missing} ${file}"
+          done
+          if [[ -n "$missing" ]]; then
+            echo "::error::Release $tag is missing:${missing} — it stays a draft."
+            exit 1
+          fi
+
+          if [[ "$prerelease" == "false" ]]; then
+            obsidian_assets="$(gh release view "$version" --json assets --jq '.assets[].name')"
+            for file in main.js manifest.json styles.css; do
+              if ! grep -qxF "$file" <<< "$obsidian_assets"; then
+                echo "::error::Release $version is missing $file — it stays a draft."
+                exit 1
+              fi
+            done
+          fi
+
+          echo "All expected assets are present."
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.prepare.outputs.tag }}"
+          version="${{ needs.prepare.outputs.version }}"
+          prerelease="${{ needs.prepare.outputs.prerelease }}"
+
+          # Obsidian reads `releases/latest/download/manifest.json`, so the
+          # bare-version release carries the Latest marker and the v-prefixed
+          # one is published without it.
+          if [[ "$prerelease" == "false" ]] && [[ "$(gh release view "$version" --json isDraft --jq .isDraft)" == "true" ]]; then
+            gh release edit "$version" --draft=false --latest
+          fi
+
+          if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == "true" ]]; then
+            if [[ "$prerelease" == "true" ]]; then
+              gh release edit "$tag" --draft=false --prerelease --latest=false
+            else
+              gh release edit "$tag" --draft=false --latest=false
+            fi
+          fi
+
+          {
+            echo "### Published $tag"
+            echo ""
+            gh release view "$tag" --json url,assets --jq '.url'
+            echo ""
+            gh release view "$tag" --json assets --jq '.assets[].name' | sort
+            if [[ "$prerelease" == "false" ]]; then
+              echo ""
+              echo "Obsidian release: $(gh release view "$version" --json url --jq '.url')"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

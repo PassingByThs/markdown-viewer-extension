@@ -1,5 +1,8 @@
 # CI — single fibjs test entry (test/all.test.js)
 #
+# Release builds live in release.yml: pushing a `v<version>` tag builds every
+# platform and attaches the installers to the GitHub Release for that tag.
+#
 # Runs the ENTIRE suite with the fibjs runtime, exactly like `npm test`
 # locally:
 #   - pure units + DOM units
