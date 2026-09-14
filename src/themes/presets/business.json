@@ -2,7 +2,7 @@
   "id": "business",
   "name": "商务报告",
   "name_en": "Business",
-  "description": "无衅线正文、清晰层级，适合商务报告与方案",
+  "description": "无衬线正文、清晰层级，适合商务报告与方案",
   "description_en": "Sans-serif body with clear hierarchy for business reports and proposals",
   "author": "docu.md Markdown Viewer",
   "version": "1.0.0",
