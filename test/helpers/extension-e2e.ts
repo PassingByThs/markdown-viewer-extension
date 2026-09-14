@@ -171,6 +171,8 @@ export async function launchExtensionContext(
 
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   let context: BrowserContext | undefined;
+  let tracePath: string | undefined;
+  let tracingStarted = false;
 
   try {
     context = await chromium.launchPersistentContext(userDataDir, {
@@ -187,6 +189,17 @@ export async function launchExtensionContext(
       ],
     });
 
+    const artifactDir = process.env.MV_E2E_ARTIFACT_DIR?.trim();
+    if (artifactDir) {
+      const traceName = prefix.replace(/[^a-z0-9_-]/gi, '_').replace(/[-_]+$/, '') || 'extension-e2e';
+      tracePath = path.join(artifactDir, `${traceName}.zip`);
+      fs.mkdirSync(path.dirname(tracePath), { recursive: true });
+      // Keep diagnostics lightweight: DOM snapshots materially slow down the
+      // renderer-heavy suite and can change the timing being diagnosed.
+      await context.tracing.start({ screenshots: true, snapshots: false, sources: false });
+      tracingStarted = true;
+    }
+
     const extensionId = await waitForExtensionId(context);
     let closed = false;
     return {
@@ -196,13 +209,22 @@ export async function launchExtensionContext(
         if (closed) return;
         closed = true;
         try {
-          await context?.close();
+          if (tracingStarted && tracePath) {
+            await context.tracing.stop({ path: tracePath });
+          }
         } finally {
-          fs.rmSync(userDataDir, { recursive: true, force: true });
+          try {
+            await context?.close();
+          } finally {
+            fs.rmSync(userDataDir, { recursive: true, force: true });
+          }
         }
       },
     };
   } catch (error) {
+    if (tracingStarted && tracePath) {
+      await context?.tracing.stop({ path: tracePath }).catch(() => undefined);
+    }
     await context?.close().catch(() => undefined);
     fs.rmSync(userDataDir, { recursive: true, force: true });
     throw error;

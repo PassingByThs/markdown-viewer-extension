@@ -203,9 +203,12 @@ and teardown through `test/helpers/extension-e2e.ts`. Suite-level arbitrary
 sleep calls have been removed; the helper's short, bounded polling intervals
 are synchronization mechanics with diagnostic timeouts, not readiness guesses.
 
-Failure screenshots and Playwright traces are useful diagnostics and should be
-added when the suite needs richer CI failure artifacts. They are diagnostic
-artifacts, not substitutes for deterministic assertions.
+The `MV_E2E_ARTIFACT_DIR` environment variable enables one lightweight
+Playwright trace with screenshots per installed-extension suite. CI writes
+them under `test-results/extension-e2e` and uploads them only when the E2E step
+fails. Local runs leave the variable unset unless interactive failure
+diagnosis is needed. Traces are diagnostic artifacts, not substitutes for
+deterministic assertions.
 
 ## CI requirements
 
@@ -239,4 +242,5 @@ local diagnostic escape hatch only and must not be used by CI.
 - [x] Current extension E2E passes with 98 tests.
 - [x] Replace arbitrary suite waits with application-ready signals or bounded
       stability/event waits.
-- [ ] Add failure screenshots/traces where CI diagnostics justify the cost.
+- [x] Add failure traces with screenshots where CI diagnostics justify the
+      cost.

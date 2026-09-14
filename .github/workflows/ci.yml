@@ -50,8 +50,6 @@ jobs:
         uses: browser-actions/setup-chrome@v1
 
       # Playwright Chromium for the installed-extension e2e (channel:'chromium',
-      # needed because branded Chrome refuses --load-extension on macOS/Windows)
-      # Playwright Chromium for the installed-extension e2e (channel:'chromium',
       # needed because branded Chrome refuses --load-extension on macOS/Windows).
       # The range must float together with the top-level playwright-core
       # dependency (package-lock.json is gitignored, so `npm install` resolves
@@ -76,3 +74,13 @@ jobs:
 
       - name: Run installed-extension E2E (Node.js + Playwright)
         run: npm run test:e2e
+        env:
+          MV_E2E_ARTIFACT_DIR: test-results/extension-e2e
+
+      - name: Upload E2E diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-e2e-diagnostics
+          path: test-results/extension-e2e
+          if-no-files-found: ignore
