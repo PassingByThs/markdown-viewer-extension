@@ -420,13 +420,18 @@ describe('installed Chrome extension (three open modes × full fixture matrix)',
    * one async pass; on a slow CI runner a measurement that lands between
    * “selector present” and a subsequent re-render pass can observe an empty
    * container, so single-shot waits are not enough.
+   *
+   * The wait is given the whole remaining budget rather than waitFor's default
+   * 30s cap: the first mermaid render of a mode is a cold start (offscreen
+   * document + inlined mermaid bundle) and has been seen to stall past 30s on a
+   * contended runner while the very next diagram rendered in under 2s.
    */
   const waitForContent = async (mode: string, selector: string): Promise<void> => {
     const target = modeTarget(mode);
     const js = `() => Boolean(document.querySelector('${contentSel(mode)} ${selector}'))`;
     const deadline = Date.now() + 60000;
     for (;;) {
-      await waitFor(target, js);
+      await waitFor(target, js, Math.max(1000, deadline - Date.now()));
       await new Promise((resolve) => setTimeout(resolve, 350));
       if (await evalJs<boolean>(target, js)) {
         return;
