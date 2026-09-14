@@ -197,16 +197,11 @@ The following rules apply to new and modified E2E tests:
 
 ### Known follow-up work
 
-The current suite passes under Node.js + Playwright, but it still contains
-some fixed `setTimeout`/`waitForTimeout` calls for browser bootstrap,
-animation, and asynchronous rerendering. These are technical debt. Replace
-them incrementally with application-ready signals or Playwright event waits;
-do not replace them with larger fixed delays.
-
-The two installed-extension suite files also repeat some extension bootstrap
-and polling mechanics. Consolidate those mechanics into shared fixtures when
-the next E2E change touches them, while keeping capability-specific assertions
-in their current suites.
+The installed-extension suites now share their browser bootstrap, extension
+identity lookup, frame lookup, readiness polling, image settling, diagnostics,
+and teardown through `test/helpers/extension-e2e.ts`. Suite-level arbitrary
+sleep calls have been removed; the helper's short, bounded polling intervals
+are synchronization mechanics with diagnostic timeouts, not readiness guesses.
 
 Failure screenshots and Playwright traces are useful diagnostics and should be
 added when the suite needs richer CI failure artifacts. They are diagnostic
@@ -237,9 +232,11 @@ local diagnostic escape hatch only and must not be used by CI.
 - [x] CI runs the two layers explicitly.
 - [x] Extension tests use local fixtures, mocks, temporary profiles, and
       teardown.
+- [x] Shared extension bootstrap, polling, diagnostics, and teardown live in a
+      reusable test helper.
 - [x] Production and test responsibilities are documented as separate module
       boundaries.
 - [x] Current extension E2E passes with 98 tests.
-- [ ] Extract repeated extension bootstrap/polling into shared test fixtures.
-- [ ] Replace remaining arbitrary waits with application-ready signals.
+- [x] Replace arbitrary suite waits with application-ready signals or bounded
+      stability/event waits.
 - [ ] Add failure screenshots/traces where CI diagnostics justify the cost.
