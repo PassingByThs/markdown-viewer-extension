@@ -136,6 +136,9 @@ Document processing is local. docu.md does not require uploading your Markdown f
 
 ## Development Testing
 
+See [Testing Architecture and E2E Requirements](TESTING.md) for the
+project's test-layer boundaries, E2E rules, CI workflow, and review checklist.
+
 After installing dependencies and building the CLI and Chrome extension, run
 the compatibility tests and the installed-extension E2E tests separately:
 
