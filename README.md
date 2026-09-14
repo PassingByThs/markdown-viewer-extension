@@ -45,7 +45,7 @@ Run `npm run documd -- --help` for all options. Theme IDs are listed in
 
 - Clean Markdown preview for local files and supported web URLs.
 - DOCX export for editable Word documents.
-- PDF and self-contained HTML export where supported by the platform.
+- PDF, self-contained HTML, and EPUB export where supported by the platform.
 - Editable formulas in Word output.
 - Syntax highlighting for code blocks.
 - Document themes for business reports, academic writing, technical notes, reading layouts, and Chinese typography.
@@ -62,14 +62,14 @@ docu.md bridges that gap. Open the Markdown file, review the rendered result, ch
 
 ## Rich Content Support
 
-docu.md supports standard Markdown, GitHub-style tables and task lists, images, highlighted code, math formulas, SVG content, complex HTML tables, and diagrams or charts written in common text-based formats such as PlantUML, Mermaid, Vega/Vega-Lite, drawio, Canvas, Infographic, and Graphviz.
+docu.md supports standard Markdown, GitHub-style tables and task lists, images, highlighted code, math formulas, SVG content, complex HTML tables, and diagrams or charts written in common text-based formats such as PlantUML, Mermaid, Vega/Vega-Lite, drawio, Canvas, Infographic, Graphviz, and ECharts.
 
 That feature list appears here once because it is useful. The rest of the README focuses on workflows, platforms, and practical setup.
 
 ## What You Can Do
 
 - Open local or online Markdown files in a clean reading view.
-- Export finished documents to DOCX, PDF, or self-contained HTML where supported by the platform.
+- Export finished documents to DOCX, PDF, self-contained HTML, or EPUB where supported by the platform.
 - Keep formulas editable in Word instead of flattening them into screenshots.
 - Render diagrams and charts directly from Markdown source blocks.
 - Preserve code highlighting, tables, images, headings, and long-form document structure.
@@ -97,7 +97,9 @@ docu.md focuses on the handoff formats people ask for after the writing is done:
 - **DOCX** for editable Word documents.
 - **PDF** for print-ready sharing where supported.
 - **HTML** for self-contained publishing where supported.
+- **EPUB** for ebooks and whole-book exports where supported.
 - **Image/vector exports** for rendered visual blocks where supported.
+- **XLSX** for tables saved as spreadsheets where supported.
 
 Exact output options vary by platform. See the platform docs for the environment you use.
 
