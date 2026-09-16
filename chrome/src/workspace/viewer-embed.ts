@@ -335,26 +335,36 @@ async function handleDocumentMessage(message: DocumentMessage, mode: 'open' | 'u
   const { runtime, wasInitialized } = await ensureViewerInitialized(content);
 
   if (mode === 'open') {
-    if (wasInitialized) {
-      const filename = (message as ViewerOpenDocumentMessage).filename || '';
-      const isSlides = /\.slides\.md$/i.test(filename);
-      const cameFromSlidev = document.documentElement.dataset.slidevActive === '1';
+    const filename = (message as ViewerOpenDocumentMessage).filename || '';
+    const isSlides = /\.slides\.md$/i.test(filename);
+    const cameFromSlidev = document.documentElement.dataset.slidevActive === '1';
 
-      if (isSlides) {
+    if (isSlides) {
+      // The first open of a slidev deck is rendered by the implicit init hand-off
+      // (same as before); later ones go through the slidev entry point.
+      if (wasInitialized) {
         await runtime.renderSlidev(content);
-      } else if (cameFromSlidev) {
-        // Switching away from Slidev — the normal viewer DOM was destroyed.
-        // Save the pending open-document message to sessionStorage, reload the
-        // page, and restore it on the next load so initializeViewerMain can
-        // pick it up with a fresh DOM.
-        try {
-          sessionStorage.setItem('mv:pendingOpen', JSON.stringify(message));
-        } catch { /* storage blocked */ }
-        window.location.reload();
-        return; // never reached after reload
-      } else {
-        await runtime.openDocument(content, { scrollLine: targetLine });
       }
+    } else if (cameFromSlidev) {
+      // Switching away from Slidev — the normal viewer DOM was destroyed.
+      // Save the pending open-document message to sessionStorage, reload the
+      // page, and restore it on the next load so initializeViewerMain can
+      // pick it up with a fresh DOM.
+      try {
+        sessionStorage.setItem('mv:pendingOpen', JSON.stringify(message));
+      } catch { /* storage blocked */ }
+      window.location.reload();
+      return; // never reached after reload
+    } else {
+      // Always render the document explicitly, including the very first open.
+      // That first open used to rely on the viewer's own DOM hand-off (the
+      // embed page puts the markdown into body text and initializeViewerMain
+      // picks it up), and on a slow/contended boot that hand-off left the page
+      // with an existing but empty content root: no block, no error, and a
+      // fixture that never renders (the intermittent embed stall on CI). Every
+      // later open already goes through this call, so the first one now behaves
+      // the same as the rest.
+      await runtime.openDocument(content, { scrollLine: targetLine });
     }
   } else {
     await runtime.updateContent(content, targetLine);
