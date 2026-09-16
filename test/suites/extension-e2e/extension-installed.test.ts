@@ -295,6 +295,23 @@ describe('installed Chrome extension (three open modes × full fixture matrix)',
         console.log('[pageerror]', String(err).slice(0, 500));
       });
     }
+
+    // Warm up the diagram pipeline once, outside the per-case budget. The first
+    // diagram render is the expensive one: it creates the offscreen document and
+    // parses the inlined ~3 MB mermaid bundle, and on a contended CI runner that
+    // cold start has stalled past the per-case waitFor budget (the intermittent
+    // "renders fixture: diagram-center" failure). Best effort on purpose — if it
+    // cannot render here, the fixture cases below report it with real context.
+    try {
+      const started = Date.now();
+      await openFixture('embed', 'diagram-center.md');
+      await waitForContent('embed', '.diagram-block');
+      // eslint-disable-next-line no-console
+      console.log(`[warmup] first diagram render took ${Date.now() - started}ms`);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.log('[warmup] diagram pre-render failed:', String(error).slice(0, 300));
+    }
   });
 
   after(async () => {
