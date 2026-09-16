@@ -29,6 +29,36 @@ let offscreenReadyPromise: Promise<void> | null = null;
 let offscreenReadyResolve: (() => void) | null = null;
 let globalCacheStorage: CacheStorage | null = null;
 
+/**
+ * Offscreen state is shared by every concurrent render request, so it is reset in
+ * exactly one place. A ready promise that never settles is not a harmless leak:
+ * `ensureOffscreenDocument()` awaits it for every later request, so a single
+ * missed handshake used to hang renders until the caller gave up (observed as the
+ * intermittent `diagram-center` fixture stall in CI, where the next diagram then
+ * rendered in under 2s).
+ */
+function resetOffscreenState(): void {
+  offscreenCreated = false;
+  offscreenReady = false;
+  offscreenReadyPromise = null;
+  offscreenReadyResolve = null;
+}
+
+/** Mark the offscreen document usable and release everything waiting on it. */
+function markOffscreenReady(): void {
+  offscreenCreated = true;
+  offscreenReady = true;
+  releaseOffscreenWaiters();
+}
+
+/** Release waiters without marking the document ready (creation failed). */
+function releaseOffscreenWaiters(): void {
+  const resolve = offscreenReadyResolve;
+  offscreenReadyResolve = null;
+  offscreenReadyPromise = null;
+  if (resolve) resolve();
+}
+
 // Envelope helpers (kept local to avoid a hard dependency from background on src/messaging runtime).
 let requestCounter = 0;
 function createRequestId(): string {
@@ -659,10 +689,7 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'offscreen') {
     port.onDisconnect.addListener(() => {
       // Reset state when offscreen document disconnects
-      offscreenCreated = false;
-      offscreenReady = false;
-      offscreenReadyPromise = null;
-      offscreenReadyResolve = null;
+      resetOffscreenState();
     });
   }
 });
@@ -670,12 +697,7 @@ chrome.runtime.onConnect.addListener((port) => {
 // Handle messages from content script
 chrome.runtime.onMessage.addListener((message: BackgroundMessage, sender, sendResponse) => {
   if (isRequestEnvelope(message) && message.type === 'OFFSCREEN_READY') {
-    offscreenCreated = true;
-    offscreenReady = true;
-    if (offscreenReadyResolve) {
-      offscreenReadyResolve();
-      offscreenReadyResolve = null;
-    }
+    markOffscreenReady();
     return;
   }
 
@@ -810,31 +832,52 @@ chrome.runtime.onMessage.addListener((message: BackgroundMessage, sender, sendRe
   return false;
 });
 
-async function sendToOffscreen(request: { id: string; type: string; payload: unknown }): Promise<unknown> {
-  // Ensure offscreen document exists and is ready
-  await ensureOffscreenDocument();
+/**
+ * A silent offscreen document (dead renderer, missed handshake) would otherwise
+ * hold a render request until the caller's own 60s budget expires.
+ */
+const OFFSCREEN_REQUEST_TIMEOUT_MS = 20000;
 
+function sendOffscreenMessage(request: { id: string; type: string; payload: unknown }): Promise<unknown> {
   const offscreenRequest = {
     ...request,
     __target: 'offscreen'
   };
 
   return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Offscreen request timed out after ${OFFSCREEN_REQUEST_TIMEOUT_MS}ms`));
+    }, OFFSCREEN_REQUEST_TIMEOUT_MS);
+
     chrome.runtime.sendMessage(offscreenRequest, (response) => {
+      clearTimeout(timer);
       if (chrome.runtime.lastError) {
-        // Reset all offscreen state on communication failure
-        if (chrome.runtime.lastError.message?.includes('receiving end does not exist')) {
-          offscreenCreated = false;
-          offscreenReady = false;
-          offscreenReadyPromise = null;
-          offscreenReadyResolve = null;
-        }
         reject(new Error(`Offscreen communication failed: ${chrome.runtime.lastError.message}`));
         return;
       }
       resolve(response);
     });
   });
+}
+
+/**
+ * Forward a request to the offscreen document, retrying once against a freshly
+ * created document when the first attempt fails. The retry is what turns "the
+ * offscreen document stopped answering" back into a normal render; both attempts
+ * together still fit inside the renderer's own timeout.
+ */
+async function sendToOffscreen(request: { id: string; type: string; payload: unknown }): Promise<unknown> {
+  // Ensure offscreen document exists and is ready
+  await ensureOffscreenDocument();
+
+  try {
+    return await sendOffscreenMessage(request);
+  } catch (error) {
+    // The document is in an unknown state — drop it so the retry recreates it.
+    resetOffscreenState();
+    await ensureOffscreenDocument();
+    return await sendOffscreenMessage(request);
+  }
 }
 
 async function handleRenderEnvelopeRequest(
@@ -950,36 +993,29 @@ async function ensureOffscreenDocument(): Promise<void> {
         await new Promise(resolve => setTimeout(resolve, 100));
         // If still not ready after waiting, assume it's ready
         if (!offscreenReady) {
-          offscreenReady = true;
-          if (offscreenReadyResolve) {
-            offscreenReadyResolve();
-            offscreenReadyResolve = null;
-          }
+          markOffscreenReady();
         }
       }
       return;
     }
 
-    // For other errors, clean up and throw
-    offscreenReadyPromise = null;
-    offscreenReadyResolve = null;
+    // For other errors, clean up and throw. Waiters are released first: they then
+    // fail with a real communication error instead of hanging on this promise.
+    releaseOffscreenWaiters();
     throw new Error(`Failed to create offscreen document: ${errorMessage}`);
   }
 
-  // Wait for the offscreen document to signal it's ready (max 5 seconds)
-  const timeoutPromise = new Promise<void>((_, reject) => {
-    setTimeout(() => {
-      if (!offscreenReady) {
-        reject(new Error('Offscreen document initialization timeout'));
-      }
-    }, 5000);
-  });
-
-  try {
-    await Promise.race([offscreenReadyPromise, timeoutPromise]);
-  } catch (error) {
-    // On timeout, assume it's ready anyway (the message might have been missed)
-    offscreenReady = true;
+  // Wait for the offscreen document to signal it's ready (max 5 seconds). The
+  // document normally posts OFFSCREEN_READY almost immediately; when that message
+  // is missed (e.g. the worker was restarted while it loaded) the promise must
+  // still settle, otherwise every later render waits forever.
+  const readyWaiter = offscreenReadyPromise;
+  const timedOut = await Promise.race([
+    readyWaiter.then(() => false),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 5000)),
+  ]);
+  if (timedOut && !offscreenReady) {
+    markOffscreenReady();
   }
 }
 
