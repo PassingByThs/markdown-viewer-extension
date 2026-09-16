@@ -170,14 +170,21 @@ export class RendererService {
    * render. Pushing the theme is a best-effort follow-up (the diagram is what the
    * caller asked for), and on a cold start the very first host call of a session
    * can fail with a transport error — that used to reject the whole render, which
-   * is how the first diagram of a session intermittently never appeared. The theme
-   * stays dirty on failure, so the next render tries again.
+   * is how the first diagram of a session intermittently never appeared. The
+   * second attempt usually succeeds, so the first diagram still follows the theme;
+   * if both fail the render goes ahead and themeDirty keeps the theme queued.
    */
   private async applyThemeForRender(): Promise<void> {
-    try {
-      await this.applyThemeIfNeeded();
-    } catch (error) {
-      console.warn('[RendererService] theme push failed, rendering with the current theme:', (error as Error).message);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await this.applyThemeIfNeeded();
+        return;
+      } catch (error) {
+        console.warn(
+          `[RendererService] theme push attempt ${attempt + 1} failed:`,
+          (error as Error).message,
+        );
+      }
     }
   }
 
