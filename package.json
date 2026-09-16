@@ -120,6 +120,7 @@
     "material-icon-theme": "^5.33.1",
     "mathjax-full": "^3.2.2",
     "mermaid": "^11.12.2",
+    "postcss": "^8.5.26",
     "playwright-core": "^1.62.1",
     "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",

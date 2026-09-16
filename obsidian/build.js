@@ -18,12 +18,29 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dagreShimPlugin } from '../scripts/dagre-shim-plugin.js';
+import { scopeCss } from '../scripts/scope-css.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 const outdir = path.join(projectRoot, 'dist', 'obsidian');
 const stagingDir = path.join(projectRoot, 'dist', '.obsidian-staging');
 const embeddedAssetsVirtualModulePath = 'obsidian-embedded-assets';
+
+/**
+ * Obsidian loads this plugin's styles.css into the *host application*
+ * document, not into an isolated webview. Every top-level selector therefore
+ * competes with Obsidian's own styles, and an unscoped `body { color: … }`
+ * repainted the host editor text with the viewer's light palette (issue
+ * #126). Everything written to dist/obsidian/styles.css is scoped to the
+ * viewer container first.
+ */
+const SCOPE_SELECTOR = '.markdown-viewer-preview';
+const SCOPE_OPTIONS = {
+  scope: SCOPE_SELECTOR,
+  // Classes carried by the container element itself: preview-view.ts adds
+  // `markdown-viewer-preview`, the shared viewer adds `mv-embed` / `mv-panel`.
+  containerClasses: ['markdown-viewer-preview', 'mv-embed', 'mv-panel'],
+};
 
 /**
  * Sync version from package.json to manifest.json
@@ -287,7 +304,7 @@ function copyAssets() {
     console.log('  • iframe-render.html');
   }
 
-  // styles.css for plugin (container styles + webview CSS + settings CSS)
+  // styles.css for plugin: host-scoped webview CSS + container overrides.
   // Obsidian auto-loads styles.css — merge everything into one file.
   const pluginStyles = `
 /* Obsidian Markdown Viewer Preview — plugin styles */
@@ -371,13 +388,13 @@ function copyAssets() {
 }
 `;
 
-  // Combine: plugin container styles + webview CSS + settings panel CSS
-  let combinedCss = pluginStyles.trim() + '\n\n';
+  // Every section below is injected into the host document, so each one is
+  // scoped to the viewer container before it is written out.
+  const sections = [];
 
-  // Append webview styles (blockquote, code, headings, etc.)
+  // Webview styles (blockquote, code, headings, etc.)
   const webviewCssPath = path.join(stagingDir, 'webview', 'styles.css');
   if (fs.existsSync(webviewCssPath)) {
-    combinedCss += '/* === Webview Styles === */\n';
     let webviewCss = fs.readFileSync(webviewCssPath, 'utf8');
     // Replace @font-face url() references with base64-embedded data URLs
     webviewCss = webviewCss.replace(/@font-face\s*\{[^}]*\}/g, (block) => {
@@ -389,22 +406,30 @@ function copyAssets() {
       const b64 = fs.readFileSync(fontPath).toString('base64');
       return block.replace(/url\(['"]?\.\/(.*?\.woff2)['"]?\)\s*(format\([^)]*\))?/, `url("data:font/woff2;base64,${b64}") format("woff2")`);
     });
-    combinedCss += webviewCss + '\n\n';
+    sections.push(['/* === Webview Styles === */', webviewCss]);
   }
 
-  // Append settings panel CSS
+  // Settings panel CSS
   const settingsCssPath = path.join(stagingDir, 'webview', 'settings-panel.css');
   if (fs.existsSync(settingsCssPath)) {
-    combinedCss += '/* === Settings Panel Styles === */\n';
-    combinedCss += fs.readFileSync(settingsCssPath, 'utf8') + '\n';
+    sections.push(['/* === Settings Panel Styles === */', fs.readFileSync(settingsCssPath, 'utf8')]);
   }
 
-  // Append shared TOC panel CSS from src (single source of truth)
+  // Shared TOC panel CSS from src (single source of truth)
   const tocPanelCssPath = path.join(projectRoot, 'src', 'ui', 'toc-panel.css');
   if (fs.existsSync(tocPanelCssPath)) {
-    combinedCss += '\n/* === Shared TOC Panel Styles === */\n';
-    combinedCss += fs.readFileSync(tocPanelCssPath, 'utf8') + '\n';
+    sections.push(['/* === Shared TOC Panel Styles === */', fs.readFileSync(tocPanelCssPath, 'utf8')]);
   }
+
+  let combinedCss = sections
+    .map(([header, css]) => `${header}\n${scopeCss(css, SCOPE_OPTIONS)}\n`)
+    .join('\n');
+
+  // Container overrides go last: they are the platform's final say, and now
+  // that the webview rules carry the container class too (scoping), only
+  // source order can let an override win a specificity tie. Already written
+  // against the container, so this block is not scoped again.
+  combinedCss += '\n/* === Obsidian Container Overrides === */\n' + pluginStyles.trim() + '\n';
 
   fs.writeFileSync(path.join(outdir, 'styles.css'), combinedCss);
   console.log('  • styles.css (combined)');
