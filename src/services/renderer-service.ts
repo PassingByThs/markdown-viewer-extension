@@ -140,7 +140,7 @@ export class RendererService {
       }
       
       // Apply theme if needed
-      await this.applyThemeIfNeeded();
+      await this.applyThemeForRender();
       
       // Render via host
       const result = await this.getHost().send<RenderResult>('RENDER_DIAGRAM', {
@@ -156,13 +156,29 @@ export class RendererService {
     }
     
     // No cache - render directly
-    await this.applyThemeIfNeeded();
+    await this.applyThemeForRender();
     
     return this.getHost().send<RenderResult>('RENDER_DIAGRAM', {
       renderType: type,
       input,
       themeConfig: this.themeConfig
     }, 60000);
+  }
+
+  /**
+   * Push the current theme to the render host without letting a failure abort the
+   * render. Pushing the theme is a best-effort follow-up (the diagram is what the
+   * caller asked for), and on a cold start the very first host call of a session
+   * can fail with a transport error — that used to reject the whole render, which
+   * is how the first diagram of a session intermittently never appeared. The theme
+   * stays dirty on failure, so the next render tries again.
+   */
+  private async applyThemeForRender(): Promise<void> {
+    try {
+      await this.applyThemeIfNeeded();
+    } catch (error) {
+      console.warn('[RendererService] theme push failed, rendering with the current theme:', (error as Error).message);
+    }
   }
 
   /**
