@@ -40,11 +40,17 @@ class MarkdownViewerElementProxy extends HTMLElement {
 
   private attached = false;
   private pending: PendingRequest[] = [];
+  private notAttachedWarnTimer: ReturnType<typeof setTimeout> | undefined;
+  private warnedNotAttached = false;
 
   attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
     if (oldValue === newValue) return;
     if (name === READY_ATTRIBUTE && newValue !== null) {
       this.flushPending();
+      return;
+    }
+    if (name === 'value' && newValue !== null) {
+      this.warnIfRuntimeNeverAttaches();
     }
   }
 
@@ -53,7 +59,35 @@ class MarkdownViewerElementProxy extends HTMLElement {
     // upgraded (the ready attribute is already present when we start).
     if (this.hasAttribute(READY_ATTRIBUTE)) {
       this.flushPending();
+      return;
     }
+    if (this.hasAttribute('value')) {
+      this.warnIfRuntimeNeverAttaches();
+    }
+  }
+
+  /**
+   * render()/export() reject once the ready timeout expires, but a page that only
+   * sets `value` would otherwise stay blank with no clue why (host-page reports of
+   * "element present, nothing rendered" are impossible to diagnose from that).
+   * Report the same condition once, with the element identity included.
+   */
+  private warnIfRuntimeNeverAttaches(): void {
+    if (this.attached || this.warnedNotAttached || this.notAttachedWarnTimer !== undefined) {
+      return;
+    }
+    this.notAttachedWarnTimer = setTimeout(() => {
+      this.notAttachedWarnTimer = undefined;
+      if (this.attached || this.warnedNotAttached) return;
+      this.warnedNotAttached = true;
+      console.error(
+        '[markdown-viewer] content was requested for this element but the extension runtime never ' +
+        'attached, so nothing was rendered. Check that the Markdown Viewer extension is installed and ' +
+        'allowed on this site, then reload the page. ' +
+        `(element: <markdown-viewer${this.id ? ` id="${this.id}"` : ''}` +
+        `${this.getAttribute('mode') ? ` mode="${this.getAttribute('mode')}"` : ''}>)`,
+      );
+    }, READY_TIMEOUT_MS);
   }
 
   /**
@@ -85,6 +119,10 @@ class MarkdownViewerElementProxy extends HTMLElement {
 
   private flushPending(): void {
     this.attached = true;
+    if (this.notAttachedWarnTimer !== undefined) {
+      clearTimeout(this.notAttachedWarnTimer);
+      this.notAttachedWarnTimer = undefined;
+    }
     const pending = this.pending.splice(0);
     for (const onReady of pending) onReady();
   }
