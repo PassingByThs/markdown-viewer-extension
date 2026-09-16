@@ -33,11 +33,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { chromium, type BrowserContext, type Page, type Frame } from 'playwright-core';
+import { type BrowserContext, type Page, type Frame } from 'playwright-core';
 
-const SKIP_EXT = process.env.MV_SKIP_EXT_TESTS === '1';
+import { EXT_DIR, SKIP_EXT, launchExtensionContext } from '../../helpers/extension-launch.ts';
 
-const EXT_DIR = path.resolve('dist/chrome');
 const LAYOUT_DIR = path.resolve('test/fixtures/layout');
 
 const FIXED_SETTINGS = {
@@ -251,19 +250,9 @@ describe('installed Chrome extension (three open modes × full fixture matrix)',
     });
 
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-installed-'));
-    context = await chromium.launchPersistentContext(userDataDir, {
-      channel: 'chromium',
-      headless: true,
-      viewport: { width: 1440, height: 900 },
-      args: [
-        `--disable-extensions-except=${EXT_DIR}`,
-        `--load-extension=${EXT_DIR}`,
-        '--no-first-run',
-        '--disable-default-apps',
-        // Let content scripts fetch file:// resources (fixture images).
-        '--allow-file-access-from-files',
-      ],
-    });
+    // Let content scripts fetch file:// resources (fixture images) — see
+    // test/helpers/extension-launch.ts for the shared launch arguments.
+    context = await launchExtensionContext(userDataDir);
 
     extensionId = await waitForExtensionId(context);
 
@@ -973,18 +962,7 @@ describe('installed Chrome extension — workspace preview of nested-directory f
     });
 
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-nested-workspace-'));
-    context = await chromium.launchPersistentContext(userDataDir, {
-      channel: 'chromium',
-      headless: true,
-      viewport: { width: 1440, height: 900 },
-      args: [
-        `--disable-extensions-except=${EXT_DIR}`,
-        `--load-extension=${EXT_DIR}`,
-        '--no-first-run',
-        '--disable-default-apps',
-        '--allow-file-access-from-files',
-      ],
-    });
+    context = await launchExtensionContext(userDataDir);
 
     extensionId = await waitForExtensionId(context);
 
@@ -1145,18 +1123,7 @@ describe('installed Chrome extension — SUMMARY panel preview of nested chapter
     });
 
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-nested-summary-'));
-    context = await chromium.launchPersistentContext(userDataDir, {
-      channel: 'chromium',
-      headless: true,
-      viewport: { width: 1440, height: 900 },
-      args: [
-        `--disable-extensions-except=${EXT_DIR}`,
-        `--load-extension=${EXT_DIR}`,
-        '--no-first-run',
-        '--disable-default-apps',
-        '--allow-file-access-from-files',
-      ],
-    });
+    context = await launchExtensionContext(userDataDir);
 
     extensionId = await waitForExtensionId(context);
 
@@ -1318,18 +1285,7 @@ describe('installed Chrome extension — SUMMARY panel started from a chapter fi
     });
 
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-chapter-start-'));
-    context = await chromium.launchPersistentContext(userDataDir, {
-      channel: 'chromium',
-      headless: true,
-      viewport: { width: 1440, height: 900 },
-      args: [
-        `--disable-extensions-except=${EXT_DIR}`,
-        `--load-extension=${EXT_DIR}`,
-        '--no-first-run',
-        '--disable-default-apps',
-        '--allow-file-access-from-files',
-      ],
-    });
+    context = await launchExtensionContext(userDataDir);
 
     extensionId = await waitForExtensionId(context);
 

@@ -47,11 +47,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
-import { chromium, type BrowserContext, type Page } from 'playwright-core';
+import { type BrowserContext, type Page } from 'playwright-core';
 import JSZip from 'jszip';
 
-const SKIP_EXT = process.env.MV_SKIP_EXT_TESTS === '1';
-const EXT_DIR = path.resolve('dist/chrome');
+import { EXT_DIR, SKIP_EXT, launchExtensionContext } from '../../helpers/extension-launch.ts';
 
 // 1×1 red PNG so data-URI images are decodable without file access.
 const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -210,19 +209,7 @@ describe('installed Chrome extension — table & image/diagram context menus', {
 
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-context-menu-'));
     downloadsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-context-menu-dl-'));
-    context = await chromium.launchPersistentContext(userDataDir, {
-      channel: 'chromium',
-      headless: true,
-      acceptDownloads: true,
-      viewport: { width: 1440, height: 900 },
-      args: [
-        `--disable-extensions-except=${EXT_DIR}`,
-        `--load-extension=${EXT_DIR}`,
-        '--no-first-run',
-        '--disable-default-apps',
-        '--allow-file-access-from-files',
-      ],
-    });
+    context = await launchExtensionContext(userDataDir, { acceptDownloads: true });
     extensionId = await waitForExtensionId(context);
 
     page = await context.newPage();
