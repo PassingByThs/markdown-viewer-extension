@@ -1,4 +1,4 @@
-// Suite group: installed-extension e2e (fibjs test runner).
+// Suite group: installed-extension E2E (Node.js test runner + Playwright).
 // Need `npm run build:chrome` (dist/chrome) and Playwright Chromium
 // (channel:'chromium' — branded Chrome refuses --load-extension).
 // Set MV_CHROME_EXECUTABLE to run against a specific build instead of the
