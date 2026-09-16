@@ -21,6 +21,16 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Ad-hoc low-version runs, e.g. versions: "121 123"
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: 'Chrome for Testing versions for the matrix (space separated, prefixes allowed)'
+        default: '120 121 122 123'
+
+env:
+  # Chrome for Testing versions covered by the matrix job (see below).
+  CF_T_VERSIONS: ${{ github.event.inputs.versions || '120 121 122 123' }}
 
 jobs:
   test:
@@ -75,3 +85,63 @@ jobs:
 
       - name: Run all tests
         run: npm test
+
+  # Low-version coverage for the installed extension.
+  #
+  # The bundled Playwright Chromium is always the newest, so version-specific
+  # platform behaviour can only be checked against real older builds — e.g. the
+  # contextMenus API only gained Promise support in Chrome 123, which is what a
+  # Windows user on Chrome 120-122 reported as
+  # "Unchecked runtime.lastError: Cannot find menu item with id preview-as-markdown".
+  #
+  # Why the x64 Linux runner: Chrome 120/121 crash on newer macOS hosts (macOS 26)
+  # before any extension code runs, so the low versions can only be covered here.
+  #
+  # The probe runs on `node --test` instead of fibjs: it needs only node:test and
+  # playwright-core, and Node 22.18+/24 strips the TypeScript types natively, so
+  # this job does not need the fibjs dev build.
+  chrome-matrix:
+    name: Chrome version matrix (${{ github.event.inputs.versions || '120 121 122 123' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install
+
+      # The probe loads dist/chrome (same build the main job tests).
+      - name: Build Chrome extension
+        run: npm run build:chrome
+
+      # Shared libraries for Chrome for Testing; no second browser download.
+      - name: Install browser dependencies
+        run: |
+          npm install --no-save playwright@^1.62.1
+          npx playwright install-deps chromium
+
+      # The Chrome for Testing archives (~140 MB each) dominate the job. Bump the
+      # key when CF_T_VERSIONS changes so the new versions get cached too.
+      - name: Cache Chrome for Testing builds
+        uses: actions/cache@v4
+        with:
+          path: .cache/chrome-for-testing
+          key: cft-linux64-v1
+          restore-keys: cft-linux64-
+
+      - name: Run version matrix (contextMenus probe)
+        run: MV_TEST_RUNNER=node node scripts/chrome-test-matrix.js --strict $CF_T_VERSIONS
+
+      # Availability check on the oldest version in the list: the full
+      # installed-extension group (open modes × fixture matrix, in-page menus,
+      # browser menu probe).
+      - name: Run full extension e2e on the oldest version
+        run: |
+          set -- $CF_T_VERSIONS
+          echo "oldest version in the list: $1"
+          MV_TEST_RUNNER=node node scripts/chrome-test-matrix.js --strict \
+            --test test/suites/extension-e2e/index.js "$1"
