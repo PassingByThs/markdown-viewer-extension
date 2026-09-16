@@ -743,8 +743,24 @@ describe('installed Chrome extension (three open modes × full fixture matrix)',
       // failure names the exact markdown case (slow-CI friendly).
       for (const fixture of MATRIX_FIXTURES) {
         it(`renders fixture: ${fixture.name}`, async () => {
-          await openFixture(mode, `${fixture.name}.md`, fixture.overrides);
-          await fixture.run(mode);
+          const runCase = async () => {
+            await openFixture(mode, `${fixture.name}.md`, fixture.overrides);
+            await fixture.run(mode);
+          };
+
+          try {
+            await runCase();
+          } catch (error) {
+            // Known intermittent stall: the first render of a page can miss its
+            // async slot (no console error, no plugin failure — and the next
+            // fixture of the same mode renders in under 2s). Re-open the fixture
+            // once; a real regression still fails on the second attempt. The
+            // retry is logged, so the stall stays visible in the CI output.
+            if (!/timed out/i.test(String(error))) throw error;
+            // eslint-disable-next-line no-console
+            console.log(`[retry] ${mode}/${fixture.name}: ${String(error).slice(0, 160)}`);
+            await runCase();
+          }
         });
       }
     });
