@@ -1173,44 +1173,115 @@ async function getMenuTitle(isRaw = false): Promise<string> {
   return chrome.i18n.getMessage(key) || defaultText;
 }
 
-// Initialize context menu for viewing any file as markdown
-async function initializeContextMenu(): Promise<void> {
-  try {
-    // Remove old menu items if exist (prevents duplicate ID error on SW restart)
-    try {
-      await chrome.contextMenus.remove('preview-as-markdown');
-    } catch {
-      // Ignore if old menu doesn't exist
-    }
-    try {
-      await chrome.contextMenus.remove('view-as-markdown');
-    } catch {
-      // Ignore if menu doesn't exist yet
-    }
-    
-    const title = await getMenuTitle();
-    chrome.contextMenus.create({
-      id: 'view-as-markdown',
-      title,
-      contexts: ['link', 'page'],
-      documentUrlPatterns: ['file://*/*', 'http://*/*', 'https://*/*']
+const CONTEXT_MENU_ID = 'view-as-markdown';
+
+// The contextMenus API only gained Promise support in Chrome 123 (the bundle
+// targets Chrome 120 syntax, so Chrome 120-122 is supported as well). On those
+// versions a promise-style `remove`/`update` never rejects: the failure stays in
+// runtime.lastError unread, so Chrome logs
+// "Unchecked runtime.lastError: Cannot find menu item with id ..." even for calls
+// that are expected to fail (removing an item that does not exist yet, updating
+// before creation finished). The callback form plus an explicit runtime.lastError
+// read behaves identically on every supported version and keeps the service
+// worker console clean.
+function removeAllContextMenus(): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.contextMenus.removeAll(() => {
+      // An already empty menu list is not an error worth reporting.
+      void chrome.runtime.lastError;
+      resolve();
     });
+  });
+}
+
+function createContextMenuItem(title: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    chrome.contextMenus.create(
+      {
+        id: CONTEXT_MENU_ID,
+        title,
+        contexts: ['link', 'page'],
+        documentUrlPatterns: ['file://*/*', 'http://*/*', 'https://*/*']
+      },
+      () => {
+        // create() reports failures (e.g. duplicate id) through lastError only.
+        const error = chrome.runtime.lastError;
+        if (error) {
+          console.warn('Failed to create context menu:', error.message);
+          resolve(false);
+        } else {
+          resolve(true);
+        }
+      }
+    );
+  });
+}
+
+function updateContextMenuItem(title: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    chrome.contextMenus.update(CONTEXT_MENU_ID, { title }, () => {
+      // A missing menu item (not created yet, or dropped on a service worker
+      // restart) is reported through lastError instead of throwing.
+      resolve(!chrome.runtime.lastError);
+    });
+  });
+}
+
+// Initialize context menu for viewing any file as markdown
+async function initializeContextMenu(titleOverride?: string): Promise<boolean> {
+  try {
+    // Menu items do not survive a browser restart, but they do survive a service
+    // worker restart, and the id changed in earlier versions (preview-as-markdown):
+    // clear every leftover before creating, otherwise create() fails on a duplicate id.
+    await removeAllContextMenus();
+
+    const title = titleOverride ?? await getMenuTitle();
+    return await createContextMenuItem(title);
   } catch (error) {
     console.error('Failed to create context menu:', error);
+    return false;
   }
+}
+
+let contextMenuReady = false;
+let contextMenuInit: Promise<void> | null = null;
+
+// Create the menu once per service worker life cycle. Concurrent callers share the
+// in-flight initialization so they cannot race into a duplicate id.
+function ensureContextMenu(title?: string): Promise<void> {
+  if (contextMenuReady) {
+    return Promise.resolve();
+  }
+  if (!contextMenuInit) {
+    contextMenuInit = initializeContextMenu(title)
+      .then((created) => {
+        contextMenuReady = created;
+      })
+      .finally(() => {
+        contextMenuInit = null;
+      });
+  }
+  return contextMenuInit;
 }
 
 // Update context menu when settings change
 async function updateContextMenu(tabId?: number): Promise<void> {
   try {
+    // Wait for the initial creation instead of racing it, so the very first update
+    // of a fresh service worker does not hit a missing menu item.
+    await ensureContextMenu();
+
     const isRaw = tabId !== undefined ? injectedTabs.has(tabId) : false;
     const title = await getMenuTitle(isRaw);
-    await chrome.contextMenus.update('view-as-markdown', { title });
-  } catch (error) {
-    // Menu might not exist yet, ignore
-    if (!error?.toString().includes('Cannot find menu item')) {
-      console.error('Failed to update context menu:', error);
+    const updated = await updateContextMenuItem(title);
+    if (!updated) {
+      // The item is gone (service worker restart, manual removal): rebuild it so the
+      // title matches the current tab instead of staying stale.
+      contextMenuReady = false;
+      await ensureContextMenu(title);
     }
+  } catch (error) {
+    console.error('Failed to update context menu:', error);
   }
 }
 
@@ -1234,7 +1305,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 // Handle context menu clicks
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === 'view-as-markdown' && tab?.id) {
+  if (info.menuItemId === CONTEXT_MENU_ID && tab?.id) {
     const tabId = tab.id;
     let targetUrl = '';
     
@@ -1286,4 +1357,4 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 
 // Initialize context menu when extension loads
-initializeContextMenu();
+void ensureContextMenu();
