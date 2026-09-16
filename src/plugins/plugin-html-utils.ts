@@ -167,6 +167,12 @@ export function replacePlaceholderWithImage(id: string, result: PluginRenderResu
 
     // Validate source hash match to prevent concurrent rendering race conditions
     if (sourceHash && expectedSourceHash !== sourceHash) {
+      // The placeholder belongs to an older render pass: dropping the result is
+      // correct, but it is also the moment a diagram can disappear from the page
+      // without a trace, so leave a line behind.
+      console.warn(
+        `[PluginTask] ${pluginType} result dropped for ${id}: source hash changed (rendered ${expectedSourceHash}, current ${sourceHash})`,
+      );
       return;
     }
 
@@ -197,6 +203,10 @@ export function replacePlaceholderWithImage(id: string, result: PluginRenderResu
     if (element) {
       placeholder.replaceWith(element);
     } else {
+      // createPluginResultElement rejects results it cannot render (e.g. a missing
+      // base64 payload). Removing the placeholder then leaves a gap with no other
+      // trace, so report the block that was lost.
+      console.warn(`[PluginTask] ${pluginType} result could not be turned into an element for ${id} — the block will be missing`);
       placeholder.remove();
     }
 

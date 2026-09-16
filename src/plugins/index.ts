@@ -144,6 +144,9 @@ export function registerRemarkPlugins(
                 const placeholderBefore = document.getElementById(id);
                 
                 if (!placeholderBefore) {
+                  // A newer render replaced the document while this task waited: the
+                  // block is rendered by that pass instead. Keep this quiet — it is
+                  // normal supersede traffic, not a failure.
                   return;
                 }                
                 try {
@@ -157,6 +160,12 @@ export function registerRemarkPlugins(
                     // This ensures block moves don't lose rendered diagrams
                     syncBlockHtmlFromDOM(id);
                   } else {
+                    // The renderer resolved without producing anything. Removing the
+                    // placeholder leaves a gap in the document, so say why instead of
+                    // leaving the reader (and the logs) with nothing.
+                    console.warn(
+                      `[PluginTask] ${plugin.type} produced no result for ${id}${typeof data.sourceLine === 'number' ? ` (line ${data.sourceLine})` : ''} — the block will be missing`,
+                    );
                     const placeholder = document.getElementById(id);
                     if (placeholder) {
                       placeholder.remove();
