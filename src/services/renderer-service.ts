@@ -47,6 +47,21 @@ export interface RendererServiceOptions {
 // ============================================================================
 
 /**
+ * Transport-level failures seen while the service worker and the offscreen
+ * document come up ("Cannot read properties of null (reading 'then')" is thrown
+ * by Chrome's binding before the request is dispatched). Renders are idempotent,
+ * so retrying them is safe.
+ */
+function isColdStartTransportFailure(message: string): boolean {
+  return message.includes('Cannot read properties of null')
+    || message.includes('Runtime error:')
+    || message.includes('No response received')
+    || message.includes('Offscreen communication failed')
+    || message.includes('Offscreen request timed out')
+    || message.includes('Failed to create offscreen document');
+}
+
+/**
  * Unified renderer service using RenderHost for backend communication.
  * Supports cache integration. RenderHost is lazily initialized on first use.
  */
@@ -143,7 +158,7 @@ export class RendererService {
       await this.applyThemeForRender();
       
       // Render via host
-      const result = await this.getHost().send<RenderResult>('RENDER_DIAGRAM', {
+      const result = await this.sendToHost<RenderResult>('RENDER_DIAGRAM', {
         renderType: type,
         input,
         themeConfig: this.themeConfig
@@ -158,7 +173,7 @@ export class RendererService {
     // No cache - render directly
     await this.applyThemeForRender();
     
-    return this.getHost().send<RenderResult>('RENDER_DIAGRAM', {
+    return this.sendToHost<RenderResult>('RENDER_DIAGRAM', {
       renderType: type,
       input,
       themeConfig: this.themeConfig
@@ -166,25 +181,40 @@ export class RendererService {
   }
 
   /**
-   * Push the current theme to the render host without letting a failure abort the
-   * render. Pushing the theme is a best-effort follow-up (the diagram is what the
-   * caller asked for), and on a cold start the very first host call of a session
-   * can fail with a transport error — that used to reject the whole render, which
-   * is how the first diagram of a session intermittently never appeared. The
-   * second attempt usually succeeds, so the first diagram still follows the theme;
-   * if both fail the render goes ahead and themeDirty keeps the theme queued.
+   * Send a request to the render host, surviving the cold start of a session: the
+   * first call(s) can fail while the service worker starts and the offscreen
+   * document is created. Without the retry the first diagram of a session simply
+   * never appeared (the intermittent CI fixture failure).
+   */
+  private async sendToHost<T>(type: string, payload: unknown, timeoutMs: number): Promise<T> {
+    const host = this.getHost();
+    await host.ensureReady();
+
+    const attempts = 3;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await host.send<T>(type, payload, timeoutMs);
+      } catch (error) {
+        const message = (error as Error).message ?? '';
+        if (attempt >= attempts || !isColdStartTransportFailure(message)) {
+          throw error;
+        }
+        console.warn(`[RendererService] ${type} attempt ${attempt} failed (${message}); retrying`);
+        await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+      }
+    }
+  }
+
+  /**
+   * Push the current theme without letting a failure abort the render: the theme
+   * is a follow-up to the render, not a precondition. themeDirty stays true when
+   * this fails, so the next render pushes it again.
    */
   private async applyThemeForRender(): Promise<void> {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        await this.applyThemeIfNeeded();
-        return;
-      } catch (error) {
-        console.warn(
-          `[RendererService] theme push attempt ${attempt + 1} failed:`,
-          (error as Error).message,
-        );
-      }
+    try {
+      await this.applyThemeIfNeeded();
+    } catch (error) {
+      console.warn('[RendererService] theme push failed, rendering with the current theme:', (error as Error).message);
     }
   }
 
