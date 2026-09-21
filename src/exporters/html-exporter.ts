@@ -137,6 +137,15 @@ export async function exportToHtml(options: HtmlExportOptions): Promise<HtmlExpo
   } = options;
 
   try {
+    // Platforms that cannot read local files may need the user's help before the
+    // first image is embedded (see PlatformAPI.prepareLocalResourceAccess).
+    const proceed = await globalThis.platform?.prepareLocalResourceAccess?.();
+    if (proceed === false) {
+      // Dismissing the platform's prompt cancels the export; the flows treat
+      // this message as a silent user cancellation.
+      throw new Error('Download cancelled by user');
+    }
+
     const htmlFilename = toHtmlFilename(filename);
     const imageCount = container.querySelectorAll('img[src]').length;
     const totalSteps = 4 + imageCount;
@@ -191,6 +200,10 @@ ${clonedContainer.outerHTML}
       filename: htmlFilename,
     };
   } catch (error) {
+    // A cancelled export is not a failure: let the flow report it silently.
+    if (error instanceof Error && error.message === 'Download cancelled by user') {
+      throw error;
+    }
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),

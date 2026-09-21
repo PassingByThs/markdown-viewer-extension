@@ -26,6 +26,8 @@ import rehypeImageUri from '../plugins/rehype-image-uri';
 import rehypeTableMerge from '../plugins/rehype-table-merge';
 import { registerRemarkPlugins } from '../plugins/index';
 import { createPlaceholderElement } from '../plugins/plugin-content-utils';
+import { replacePlaceholderWithImageUrl } from '../plugins/plugin-html-utils';
+import { syncBlockHtmlFromDOM } from './viewer/viewer-controller';
 import { generateContentHash, hashCode } from '../utils/hash';
 import { isDocumentRelativeUrl } from '../utils/document-url';
 import {
@@ -556,9 +558,25 @@ export class AsyncTaskManager {
           // Check context before DOM update
           if (task.context.cancelled) return;
           if (placeholder) {
-            const errorDetail = escapeHtml(task.error?.message || this.translate('async_unknown_error'));
-            const localizedError = this.translate('async_processing_error', [errorDetail]);
-            placeholder.outerHTML = `<pre style="background: #fee; border-left: 4px solid #f00; padding: 10px; font-size: 12px;">${localizedError}</pre>`;
+            // Degrade before reporting: content that could not be fetched but
+            // is loadable as a plain image (e.g. a local SVG on a browser that
+            // refuses local file reads) is shown as an <img> rather than as an
+            // error block.
+            const fallbackUrl = typeof task.data.fetchFallbackUrl === 'string'
+              ? task.data.fetchFallbackUrl
+              : '';
+            if (fallbackUrl && replacePlaceholderWithImageUrl(placeholder, fallbackUrl, {
+              sourceHash: task.data.sourceHash,
+              pluginType: task.type,
+            })) {
+              // Keep the in-memory block cache in sync (the block no longer
+              // holds a placeholder), like the plugin render path does.
+              syncBlockHtmlFromDOM(task.id);
+            } else {
+              const errorDetail = escapeHtml(task.error?.message || this.translate('async_unknown_error'));
+              const localizedError = this.translate('async_processing_error', [errorDetail]);
+              placeholder.outerHTML = `<pre style="background: #fee; border-left: 4px solid #f00; padding: 10px; font-size: 12px;">${localizedError}</pre>`;
+            }
           }
         } else {
           await task.callback(task.data);

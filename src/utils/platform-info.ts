@@ -94,6 +94,12 @@ type WebExtensionApiLike = {
   };
   permissions?: {
     contains: (permissions: { permissions: string[] }) => Promise<boolean>;
+    /**
+     * Prompt for host permissions. Firefox 153+ accepts `file:///*` here (the
+     * "Access local files on your computer" permission); Chrome refuses file://
+     * origins and requires the switch on chrome://extensions instead.
+     */
+    request?: (permissions: { permissions?: string[]; origins?: string[] }) => Promise<boolean>;
   };
   downloads?: {
     download: (options: { url: string; filename?: string; saveAs?: boolean }) => Promise<number | string | undefined>;

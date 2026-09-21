@@ -416,6 +416,170 @@ async function handleStorageRemoveEnvelope(
 }
 
 // ============================================================================
+// Local File Read (READ_LOCAL_FILE)
+// ============================================================================
+
+/**
+ * Request a URL from the background page, using the transport that can actually
+ * reach it.
+ *
+ * `fetch()` is specified to reject `file:` URLs outright: its mode is "cors" and
+ * CORS only exists for http(s), which Firefox reports as "CORS request not http"
+ * (surfacing as "NetworkError when attempting to fetch resource"). Host
+ * permissions do not change that — but XMLHttpRequest still goes through
+ * Firefox's file-access path, the one the extension's "Access local files on
+ * your computer" permission unlocks. Local files therefore use XHR.
+ *
+ * @param url - URL to read
+ * @returns Raw bytes plus the response content type
+ */
+async function requestUrlBytes(url: string): Promise<{ bytes: Uint8Array; contentType: string }> {
+  if (!url.startsWith('file:')) {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to read file: ${response.status} ${response.statusText}`);
+    }
+    return {
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      contentType: response.headers.get('content-type') || '',
+    };
+  }
+
+  return new Promise<{ bytes: Uint8Array; contentType: string }>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('GET', url, true);
+    request.responseType = 'arraybuffer';
+
+    request.onload = () => {
+      const bytes = request.response ? new Uint8Array(request.response as ArrayBuffer) : null;
+      // Local files are answered from disk: status 0 is the normal success case.
+      const statusOk = request.status === 0 || (request.status >= 200 && request.status < 300);
+      if (!statusOk) {
+        reject(new Error(`Failed to read file: ${request.status} ${request.statusText}`));
+        return;
+      }
+      if (!bytes) {
+        reject(new Error('Failed to read file: empty response'));
+        return;
+      }
+      let contentType = '';
+      try {
+        contentType = request.getResponseHeader('content-type') || '';
+      } catch {
+        // Some file responses expose no headers at all.
+      }
+      resolve({ bytes, contentType });
+    };
+    request.onerror = () => reject(new Error('NetworkError when reading the local file'));
+    request.ontimeout = () => reject(new Error('Timed out reading the local file'));
+    request.send();
+  });
+}
+
+/**
+ * Read a local file on behalf of a content script.
+ *
+ * `fetch()` is specified to reject non-http schemes ("CORS request not http"),
+ * so local files go through XMLHttpRequest, which reaches Firefox's file-access
+ * path (see requestUrlBytes). On a stock profile that path is still refused —
+ * `security.fileuri.strict_origin_policy` limits local reads to the file's own
+ * directory tree — and nothing else can substitute for it: page-context reads
+ * are refused by the same policy, and an image the page loaded keeps its pixels
+ * unreadable (the canvas is tainted).
+ *
+ * Requires `file:` in the extension_pages CSP `connect-src` directive (see
+ * firefox/manifest.json).
+ *
+ * @param filePath - Absolute file:// URL (or any fetchable URL)
+ * @param binary - Return base64-encoded content instead of text
+ * @returns File content plus the response content type
+ */
+async function readLocalFile(
+  filePath: string,
+  binary: boolean
+): Promise<{ content: string; contentType?: string }> {
+  const { bytes, contentType } = await requestUrlBytes(filePath);
+
+  return binary
+    ? { content: bytesToBase64(bytes), contentType }
+    : { content: new TextDecoder().decode(bytes), contentType };
+}
+
+/**
+ * Encode bytes as base64.
+ *
+ * Chunked conversion: the naive char-by-char loop is quadratic-ish and stalls
+ * the background page on multi-megabyte images.
+ *
+ * @param bytes - Bytes to encode
+ * @returns Base64 string
+ */
+function bytesToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binaryString = '';
+  for (let i = 0; i < bytes.byteLength; i += chunkSize) {
+    binaryString += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binaryString);
+}
+
+async function handleReadLocalFileAsync(
+  message: { id: string; type: string; payload: unknown }
+): Promise<object> {
+  try {
+    const payload = (message.payload || {}) as Record<string, unknown>;
+    const filePath = typeof payload.filePath === 'string' ? payload.filePath : '';
+
+    if (!filePath) {
+      return createResponseEnvelope(message.id, { ok: false, errorMessage: 'Missing filePath' });
+    }
+
+    const result = await readLocalFile(filePath, payload.binary === true);
+    return createResponseEnvelope(message.id, { ok: true, data: result });
+  } catch (error) {
+    const message_ = (error as Error).message;
+    const payload = (message.payload || {}) as Record<string, unknown>;
+    const filePath = typeof payload.filePath === 'string' ? payload.filePath : '';
+    // Firefox 153+ treats a manifest `file:///*` host permission as a
+    // user-grantable, default-off permission ("Access local files on your
+    // computer"). The background page is the one extension context where the
+    // real state can be read, so report it next to the failure — otherwise the
+    // blocked read looks like a plain network error.
+    const state = filePath.startsWith('file:') ? await describeFileSchemeAccess() : '';
+    return createResponseEnvelope(message.id, { ok: false, errorMessage: `${message_}${state}` });
+  }
+}
+
+/**
+ * Describe the extension's local file access state for error reporting.
+ * @returns Human-readable suffix, or an empty string when unknown
+ */
+async function describeFileSchemeAccess(): Promise<string> {
+  try {
+    const extensionApi = (browser as unknown as {
+      extension?: { isAllowedFileSchemeAccess?: () => Promise<boolean> };
+    }).extension;
+    const allowed = await extensionApi?.isAllowedFileSchemeAccess?.();
+    if (typeof allowed !== 'boolean') {
+      return '';
+    }
+    if (!allowed) {
+      return ' [local file access: NOT granted — enable "Access local files on your computer" '
+        + '(访问您计算机上的本地文件) for this extension in about:addons → Permissions and data]';
+    }
+    // The permission is granted, so what is left is Firefox's local file origin
+    // policy: the default confines a local file's reads to its own directory
+    // tree, for extension requests as much as for page ones. Nothing in an
+    // extension can bypass it.
+    return ' [local file access: granted — the permission is not the blocker; the remaining one is '
+      + 'security.fileuri.strict_origin_policy=true (the default), which confines local reads to the '
+      + "file's own directory tree — setting it to false in about:config (then restarting) lifts it]";
+  } catch {
+    return '';
+  }
+}
+
+// ============================================================================
 // Upload Operations
 // ============================================================================
 
@@ -724,6 +888,12 @@ browser.runtime.onMessage.addListener((message: BackgroundMessage, sender): Prom
       .catch((error) => {
         return createResponseEnvelope(message.id, { ok: false, errorMessage: (error as Error).message });
       });
+  }
+
+  // Local file reads (content script → background, see FirefoxDocumentService:
+  // content scripts cannot read file:// URLs themselves)
+  if (message.type === 'READ_LOCAL_FILE') {
+    return handleReadLocalFileAsync(message);
   }
 
   // Cache operations

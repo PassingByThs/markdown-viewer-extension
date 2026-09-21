@@ -85,6 +85,12 @@ import type { ReadFileOptions } from '../../../src/types/platform';
 export class ChromeDocumentService extends BaseDocumentService {
   private _workspaceFileReader: ((relativePath: string, binary: boolean) => Promise<string>) | null = null;
 
+  /**
+   * Set once the fallback below reported a missing document context, so a page
+   * that resolves many images logs it once.
+   */
+  private _missingBaseUrlReported = false;
+
   constructor() {
     super();
     // Initialize from current page URL for file:// pages
@@ -97,6 +103,20 @@ export class ChromeDocumentService extends BaseDocumentService {
       // Extract file path from file:// URL
       const filePath = decodeURIComponent(href.replace('file://', ''));
       this.setDocumentPath(filePath);
+      return;
+    }
+
+    if (/^https?:/i.test(href)) {
+      // Remote documents need the same context: without it the base URL stays
+      // empty, `new URL(relativePath, '')` throws "Invalid base URL", and every
+      // relative resource fails — inline SVG disappeared and exported DOCX/HTML
+      // lost all images on http(s) pages, while local files kept working.
+      //
+      // The page URL is the base so the URL API resolves any nesting depth. The
+      // document path stays empty on purpose: a derived directory (e.g. `/notes/`)
+      // would make `resolvePath()` return a root-relative path that later code
+      // mistakes for an absolute file path.
+      this.setDocumentPath('', href);
     }
   }
 
@@ -126,8 +146,27 @@ export class ChromeDocumentService extends BaseDocumentService {
       return this._workspaceFileReader(relativePath, options?.binary ?? false);
     }
 
-    // Resolve relative path to absolute file:// URL
-    const absoluteUrl = new URL(relativePath, this._baseUrl).href;
+    // Resolve the relative path against the document's base URL, falling back to
+    // the page URL: a content script can be asked to read before any document
+    // context was announced, and an empty base makes `new URL()` throw
+    // "Invalid base URL" — which silently cost every relative image.
+    const base = this._baseUrl || window.location.href;
+    if (!this._baseUrl && !this._missingBaseUrlReported) {
+      this._missingBaseUrlReported = true;
+      console.warn(
+        `[DocumentService] no document base URL was set; resolving "${relativePath}" against the page URL ${base}`
+      );
+    }
+    const absoluteUrl = new URL(relativePath, base).href;
+
+    // Same-origin http(s) resources are read right here, in the page's own
+    // context: that keeps their credentials, and it works regardless of the
+    // extension worker's CSP, host permissions or Private Network Access rules.
+    // Cross-origin ones still go through the background, which MV3 makes the
+    // only context allowed to fetch them.
+    if (isSameOriginHttpUrl(absoluteUrl)) {
+      return readSameOriginHttpUrl(absoluteUrl, options?.binary ?? false);
+    }
 
     // Send to background script for file reading
     const response = await serviceChannel.send('READ_LOCAL_FILE', {
@@ -139,6 +178,16 @@ export class ChromeDocumentService extends BaseDocumentService {
   }
 
   override setDocumentPath(path: string, baseUrl?: string): void {
+    // A remote document resolves against its own URL: a `file://` base is
+    // meaningless there (it produced `file://http://host/` and the same
+    // "Invalid base URL" failure). The path itself is deliberately not kept, so
+    // resolvePath() leaves relative paths relative instead of prefixing them with
+    // a root-relative directory.
+    if (/^https?:/i.test(path)) {
+      super.setDocumentPath('', baseUrl || path);
+      return;
+    }
+
     // Normalize full file:// URLs to bare paths: BaseDocumentService derives
     // _documentDir/_baseUrl from the path, and a full URL would yield a
     // double file:// prefix (file://file:///...), which makes every later
@@ -151,6 +200,64 @@ export class ChromeDocumentService extends BaseDocumentService {
       this._baseUrl = `file://${this._documentDir}`;
     }
   }
+}
+
+/**
+ * Whether a URL is http(s) and same-origin with the page.
+ * @param url - Absolute URL
+ * @returns True for same-origin http(s) URLs
+ */
+function isSameOriginHttpUrl(url: string): boolean {
+  try {
+    const target = new URL(url);
+    return /^https?:$/.test(target.protocol) && target.origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read a same-origin http(s) URL from the content script.
+ *
+ * A page may always read its own origin, so this needs no host permission and
+ * cannot be blocked by the extension's `connect-src` — unlike the background
+ * worker's fetch, which is subject to both and failed with "Failed to fetch" for
+ * every http resource until `connect-src` allowed http.
+ *
+ * @param url - Absolute same-origin URL
+ * @param binary - Return base64-encoded content instead of text
+ * @returns Response content
+ */
+function readSameOriginHttpUrl(url: string, binary: boolean): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('GET', url, true);
+    request.responseType = 'arraybuffer';
+
+    request.onload = () => {
+      const bytes = request.response ? new Uint8Array(request.response as ArrayBuffer) : null;
+      if (!bytes || request.status < 200 || request.status >= 300) {
+        reject(new Error(`HTTP ${request.status}: ${request.statusText}`));
+        return;
+      }
+
+
+      if (binary) {
+        // Chunked conversion: the naive char-by-char loop is quadratic-ish and
+        // stalls the content script on multi-megabyte images.
+        const chunkSize = 0x8000;
+        let binaryString = '';
+        for (let i = 0; i < bytes.byteLength; i += chunkSize) {
+          binaryString += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+        }
+        resolve(btoa(binaryString));
+        return;
+      }
+      resolve(new TextDecoder().decode(bytes));
+    };
+    request.onerror = () => reject(new Error('NetworkError when fetching the resource'));
+    request.send();
+  });
 }
 
 // Create singleton instance

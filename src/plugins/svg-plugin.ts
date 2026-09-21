@@ -142,6 +142,42 @@ export class SvgPlugin extends BasePlugin {
   }
 
   /**
+   * Plain-<img> fallback for a local SVG image whose source cannot be read.
+   *
+   * The browser can still load the file as an ordinary image — that is exactly
+   * how the equivalent .png node is rendered — so showing it beats replacing the
+   * picture with an error block when the platform blocks local file reads
+   * (Firefox content scripts cannot read file:// URLs at all).
+   *
+   * Only local image nodes in local documents qualify: network URLs never reach
+   * fetchContent() (the renderer loads them through <img> directly), and a
+   * data: URL needs no platform access.
+   *
+   * @param content - Extracted node content (the image URL)
+   * @param node - AST node being processed
+   * @returns Relative URL to render as <img>, or null when no fallback applies
+   */
+  createFetchFallbackUrl(content: string, node?: ASTNode): string | null {
+    const isImageNode = node ? node.type === 'image' : this._currentNodeType === 'image';
+    if (!isImageNode || !content) {
+      return null;
+    }
+    if (content.startsWith('data:') || isNetworkUrl(content)) {
+      return null;
+    }
+    // Only for local documents. There the browser loads the file itself (the
+    // same way it already loads the .png next to it), which beats an error
+    // block. For remote documents a failed fetch is far more likely to be a
+    // 404/CORS problem, where the error text is the more useful outcome.
+    if (typeof window === 'undefined' || window.location?.protocol !== 'file:') {
+      return null;
+    }
+    // Same normalization rehype-image-uri applies to every other image, so the
+    // fallback resolves exactly like a .png would.
+    return ensureRelativeDotSlash(content);
+  }
+
+  /**
    * Get AST node selector(s) for remark visit
    * SVG plugin handles both code blocks and image nodes
    * @returns Array of node types ['code', 'image']

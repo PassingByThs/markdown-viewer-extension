@@ -136,6 +136,15 @@ export function registerRemarkPlugins(
             const initialStatus = plugin.isUrl(content) ? 'fetching' : 'ready';
             const placeholderPlugin = { ...plugin, isInline: () => isInline } as typeof plugin;
 
+            // Resolve the plain-image fallback now, while this node is in hand:
+            // if fetching the URL fails later, the task manager can still show
+            // the resource as a native <img> instead of an error block.
+            const taskData = withNodeSourceInfo(plugin.createTaskData(content), node);
+            const fetchFallbackUrl = plugin.createFetchFallbackUrl(content, node);
+            if (fetchFallbackUrl) {
+              taskData.fetchFallbackUrl = fetchFallbackUrl;
+            }
+
             const result = asyncTask(
               async (data: TaskData) => {
                 const { id, code, sourceHash } = data;
@@ -196,7 +205,7 @@ export function registerRemarkPlugins(
                   }
                 }
               },
-              withNodeSourceInfo(plugin.createTaskData(content), node),
+              taskData,
               placeholderPlugin,
               translate,
               initialStatus
