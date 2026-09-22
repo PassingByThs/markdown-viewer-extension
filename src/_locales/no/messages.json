@@ -283,6 +283,34 @@
     "message": "og aktiver 'Tillat tilgang til fil-URL-er'",
     "description": "Suffix for file access warning"
   },
+  "file_access_disabled_suffix_firefox": {
+    "message": "og slå på «Tilgang til lokale filer på datamaskinen» under Tillatelser og data",
+    "description": "Suffix for the Firefox file access warning"
+  },
+  "file_access_enable_button": {
+    "message": "Tillat tilgang til lokale filer",
+    "description": "Button that requests local file access"
+  },
+  "local_file_access_title": {
+    "message": "Local images cannot be read",
+    "description": "Title of the local file access prompt"
+  },
+  "local_file_access_message": {
+    "message": "Firefox blocks this extension from reading local files, so the images in folder {0} cannot be embedded. Choose the folder that contains them - the selected files stay on your machine and are only read for this document.",
+    "description": "Prompt shown when the folder name is known"
+  },
+  "local_file_access_message_generic": {
+    "message": "Firefox blocks this extension from reading local files, so local images in this document cannot be embedded. Choose the folder that contains them - the selected files stay on your machine and are only read for this document.",
+    "description": "Prompt shown without a folder name"
+  },
+  "local_file_access_pick": {
+    "message": "Choose folder",
+    "description": "Button that opens the folder picker"
+  },
+  "local_file_access_skip": {
+    "message": "Skip images this time",
+    "description": "Button that exports without embedding local images"
+  },
   "file_access_settings_link": {
     "message": "utvidelsesinnstillingsside",
     "description": "Link text to extension settings"

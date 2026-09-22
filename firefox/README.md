@@ -72,7 +72,51 @@ Firefox permission prompts are part of the browser security model. Local file ac
 
 ### Local files do not render
 
-Confirm that file access is enabled for the extension, then reopen the file.
+Open a local `.md` file: if it shows as plain text, the extension is not allowed
+to read your files. Firefox 153+ treats file access as a permission you grant per
+extension, and it is **off by default**:
+
+1. Open the extension popup — when access is missing it shows a warning with an
+   **Enable local file access** button; click it and allow the request.
+2. If the request is refused, enable **Access local files on your computer**
+   manually: `about:addons` → docu.md → **Permissions and data**.
+3. Reopen the file (open pages do not pick the permission up).
+
+Reinstalling or updating the extension resets this permission, so enable it
+again after every update. Without it Firefox does not run the extension on
+`file://` pages at all.
+
+Granting it is not always enough: exports also need the local file origin policy
+to allow reads outside the file's own directory, which is a separate setting —
+see the next section.
+
+### Local images are missing from an exported DOCX/HTML file
+
+Embedding an image needs its bytes, and Firefox decides whether the extension may
+read them. Local file access (above) is only the first of two settings:
+
+1. **Extension file access** — required, and resets with every reinstall/update.
+   The browser console reports the state of every read path and of the permission
+   itself (`[DocumentService] Firefox could not read a local file…`).
+2. **Local file origin policy** — `security.fileuri.strict_origin_policy`
+   (default `true`) confines a local read to files in the **same directory**: a
+   document in `notes/` cannot read `notes/assets/image.png`, and neither the
+   extension nor the page can work around that. Setting it to `false` in
+   `about:config` (then restarting) treats local files as one origin, which is
+   what Chromium browsers do, and restores both local image display and image
+   embedding.
+
+Until that policy is relaxed, Firefox has no way to hand the extension the bytes
+of a local image on its own: pages still display such images, because the browser
+loads them itself, but an export cannot embed them. The export therefore asks for
+the folder holding the images, once per document: a file picker is the one local
+read the browser always allows, so the selected files are embedded as they are
+(original bytes for images, vector SVG kept vector). Nothing is uploaded, no
+prompt appears when the regular reads already work, and the choice lasts until
+the page is reloaded.
+
+Note that reading an image's pixels through a canvas is not a substitute: the
+canvas stays tainted for local files, so no bytes can be recovered that way.
 
 ### A web Markdown file still shows as plain text
 

@@ -109,6 +109,23 @@ export class BasePlugin {
   }
 
   /**
+   * Build the plain-image fallback URL for content that needs fetching.
+   *
+   * Resolved while the AST node is still at hand, and used only if fetching
+   * fails: returning a URL lets the caller show the resource as an ordinary
+   * <img> the browser loads natively (the same rendering a non-SVG image gets)
+   * instead of an error block. Platforms can refuse to read local files (e.g.
+   * Firefox content scripts), so a readable fallback beats a dead end.
+   *
+   * @param content - Extracted node content (the URL)
+   * @param node - AST node being processed, when available
+   * @returns Image URL to render instead, or null when no fallback applies
+   */
+  createFetchFallbackUrl(_content: string, _node?: ASTNode): string | null {
+    return null; // Default: no fallback, the error block stands
+  }
+
+  /**
    * Render content to unified intermediate format
    * This is the core rendering method that returns a format-agnostic result
    * @param renderer - Renderer instance

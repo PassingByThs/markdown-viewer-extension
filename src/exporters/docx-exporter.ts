@@ -222,6 +222,16 @@ class DocxExporter {
     onProgress: DOCXProgressCallback | null = null
   ): Promise<DOCXExportResult> {
     try {
+      // Platforms that cannot read local files may need the user's help before
+      // the first image is embedded (see PlatformAPI.prepareLocalResourceAccess).
+      // Running here keeps the export menu's user gesture valid for the picker.
+      const proceed = await globalThis.platform?.prepareLocalResourceAccess?.();
+      if (proceed === false) {
+        // Dismissing the platform's prompt cancels the export; the flows treat
+        // this message as a silent user cancellation.
+        throw new Error('Download cancelled by user');
+      }
+
       this.setBaseUrl(window.location.href);
 
       // Load export-related settings via platform.settings service
@@ -409,6 +419,11 @@ class DocxExporter {
       const errMsg = error instanceof Error ? error.message : String(error);
       const errStack = error instanceof Error ? error.stack : '';
       this.imageCache.clear();
+      // A cancelled export is not a failure: let the flow report it silently
+      // instead of logging it as an error.
+      if (errMsg === 'Download cancelled by user') {
+        throw error;
+      }
       console.error('DOCX export error:', errMsg, errStack);
       return { success: false, error: errMsg };
     } finally {

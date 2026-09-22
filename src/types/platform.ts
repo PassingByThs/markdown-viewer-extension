@@ -249,4 +249,16 @@ export interface PlatformAPI {
   
   /** Unified settings service (required for all setting operations) */
   settings: import('./settings').ISettingsService;
+
+  /**
+   * Optional hook, called before an export that embeds local resources.
+   *
+   * Firefox does not let extensions read `file://` files on a default profile,
+   * so its implementation asks the user to hand over the folder holding them
+   * (a file picker is the one local read the browser always allows). Platforms
+   * whose reads just work leave this undefined.
+   *
+   * @returns False when the user cancelled the export at the prompt
+   */
+  prepareLocalResourceAccess?: () => Promise<boolean>;
 }

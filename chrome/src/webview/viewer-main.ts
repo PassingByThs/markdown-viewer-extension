@@ -1486,7 +1486,10 @@ export async function initializeViewerMain(options: ViewerMainOptions): Promise<
 
       // Point the document service at the chapter so relative reads (SVG
       // plugin, DOCX/print flows) resolve against the chapter directory too.
-      if (fileUrl.startsWith('file://') && platform.document) {
+      // Remote chapters need this as much as local ones: without it the document
+      // service falls back to the viewer's own URL (an extension page in panel
+      // mode), and every relative image read fails.
+      if (platform.document && (fileUrl.startsWith('file://') || /^https?:/i.test(fileUrl))) {
         platform.document.setDocumentPath(fileUrl);
       }
 
@@ -1740,12 +1743,27 @@ export async function initializeViewerMain(options: ViewerMainOptions): Promise<
   };
 
   /**
+   * Whether on-disk file change tracking (auto-refresh) is available.
+   *
+   * Only the Chrome background implements START_FILE_TRACKING/STOP_FILE_TRACKING;
+   * on Firefox the message is unanswered, which turned every local document into
+   * a "Failed to start file tracking" warning in the console. Remove this gate
+   * once the Firefox background tracks files too.
+   */
+  function supportsFileTracking(): boolean {
+    return platform.platform === 'chrome';
+  }
+
+  /**
    * Start file change tracking for current document
    */
   async function startFileTracking(): Promise<void> {
     const activeUrl = getActiveDocumentUrl();
     if (!activeUrl.startsWith('file://')) {
       return; // Only track local files
+    }
+    if (!supportsFileTracking()) {
+      return;
     }
 
     try {
@@ -1781,6 +1799,9 @@ export async function initializeViewerMain(options: ViewerMainOptions): Promise<
   function stopFileTracking(): void {
     const activeUrl = getActiveDocumentUrl();
     if (!activeUrl.startsWith('file://')) {
+      return;
+    }
+    if (!supportsFileTracking()) {
       return;
     }
 

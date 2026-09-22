@@ -16,8 +16,8 @@ import {
   getImageDimensions,
   determineImageType,
   isSvgImage,
+  isPngBuffer,
   convertSvgToPng,
-  getSvgContent,
 } from './docx-image-utils';
 import type {
   DOCXThemeStyles,
@@ -573,7 +573,25 @@ export function createInlineConverter({
         });
       }
       // Local SVG: fetch content then convert
-      const svgContent = await getSvgContent(url, fetchImageAsBuffer);
+      const { buffer } = await fetchImageAsBuffer(url);
+
+      // Platforms that cannot read the file may rasterise it through an image
+      // element instead, so an .svg URL can hand back PNG bytes: embed the
+      // raster rather than decoding it as SVG source.
+      if (isPngBuffer(buffer)) {
+        const { width: rasterWidth, height: rasterHeight } = await getImageDimensions(buffer, 'image/png');
+        const { width: rasterDisplayWidth, height: rasterDisplayHeight } =
+          calculateImageDimensions(rasterWidth, rasterHeight);
+        reportResourceProgress();
+        return new ImageRun({
+          data: buffer,
+          transformation: { width: rasterDisplayWidth, height: rasterDisplayHeight },
+          type: 'png',
+          altText: { title: alt || 'SVG Image', description: alt || 'SVG image', name: alt || 'svg-image' },
+        });
+      }
+
+      const svgContent = new TextDecoder().decode(buffer);
       return await convertSvgImageContent(svgContent, alt);
     } catch (error) {
       console.warn('[DOCX] Failed to load SVG image:', url, error);

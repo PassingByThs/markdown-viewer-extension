@@ -283,6 +283,34 @@
     "message": "並啟用「允許存取檔案網址」選項",
     "description": "Suffix for file access warning"
   },
+  "file_access_disabled_suffix_firefox": {
+    "message": "並在「權限與資料」中啟用「存取您電腦上的本機檔案」",
+    "description": "Suffix for the Firefox file access warning"
+  },
+  "file_access_enable_button": {
+    "message": "啟用本機檔案存取",
+    "description": "Button that requests local file access"
+  },
+  "local_file_access_title": {
+    "message": "無法讀取本機圖片",
+    "description": "Title of the local file access prompt"
+  },
+  "local_file_access_message": {
+    "message": "Firefox 不允許擴充功能讀取本機檔案，因此「{0}」中的圖片無法嵌入。請選擇包含這些圖片的資料夾——檔案不會上傳，僅用於本文件的讀取。",
+    "description": "Prompt shown when the folder name is known"
+  },
+  "local_file_access_message_generic": {
+    "message": "Firefox 不允許擴充功能讀取本機檔案，因此本文件中的本機圖片無法嵌入。請選擇包含這些圖片的資料夾——檔案不會上傳，僅用於本文件的讀取。",
+    "description": "Prompt shown without a folder name"
+  },
+  "local_file_access_pick": {
+    "message": "選擇資料夾",
+    "description": "Button that opens the folder picker"
+  },
+  "local_file_access_skip": {
+    "message": "本次不帶圖片匯出",
+    "description": "Button that exports without embedding local images"
+  },
   "file_access_settings_link": {
     "message": "擴充功能設定頁面",
     "description": "Link text to extension settings"

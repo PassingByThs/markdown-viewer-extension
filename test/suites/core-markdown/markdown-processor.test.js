@@ -818,6 +818,57 @@ Paragraph 3`;
         'Callback sourceHash should match task.data.sourceHash');
     });
 
+    it('should degrade a failed fetch to a plain <img> when a fallback URL exists', async () => {
+      container.innerHTML = '';
+      const manager = new AsyncTaskManager();
+      // SVG image node: inline, and its URL can be loaded by the browser even
+      // when the platform refuses to read the file for us.
+      const mockPlugin = { type: 'svg', isInline: () => true };
+      const { task, placeholder } = manager.createTask(
+        async () => {},
+        { code: './assets/logo.svg', fetchFallbackUrl: './assets/logo.svg' },
+        mockPlugin,
+        'fetching'
+      );
+
+      container.innerHTML = `<div class="block" data-block-id="b1">${placeholder.value}</div>`;
+
+      // Emulate plugin.fetchContent() rejecting (e.g. Firefox refuses to read
+      // file:// from a content script): the task manager renders the task in
+      // its error state.
+      task.setError(new Error('Cannot load SVG file: ./assets/logo.svg - NetworkError'));
+
+      await manager.processAll();
+
+      assert.strictEqual(htmlDoc.getElementById(task.id), null, 'Placeholder should be replaced');
+      const fallback = container.querySelector('img');
+      assert.ok(fallback !== null, 'Fallback should be rendered as a plain <img>');
+      assert.ok(fallback.getAttribute('data-plugin-rendered') === 'true',
+        'Fallback should keep the placeholder source hash for DOM diff matching');
+      assert.strictEqual(fallback.getAttribute('src'), './assets/logo.svg',
+        'Fallback <img> should point at the original URL');
+      assert.strictEqual(container.querySelector('pre'), null, 'No error block when the fallback applies');
+    });
+
+    it('should still report an error when no fetch fallback is available', async () => {
+      container.innerHTML = '';
+      const manager = new AsyncTaskManager();
+      const { task, placeholder } = manager.createTask(
+        async () => {},
+        { code: 'broken content' },
+        { type: 'svg', isInline: () => false },
+        'fetching'
+      );
+
+      container.innerHTML = `<div class="block" data-block-id="b2">${placeholder.value}</div>`;
+      task.setError(new Error('Cannot load SVG file: broken content'));
+
+      await manager.processAll();
+
+      assert.strictEqual(htmlDoc.getElementById(task.id), null, 'Placeholder should be replaced');
+      assert.ok(container.querySelector('pre') !== null, 'Error block should be rendered');
+    });
+
     it('should have sourceHash available for replacePlaceholderWithImage in callback', async () => {
       container.innerHTML = '';
       const manager = new AsyncTaskManager();

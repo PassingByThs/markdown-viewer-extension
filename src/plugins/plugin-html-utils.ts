@@ -152,6 +152,55 @@ export function createPluginResultElement(
 }
 
 /**
+ * Replace a failed diagram placeholder with a plain <img>.
+ *
+ * Degradation path for URL-based plugin content whose source could not be read
+ * (e.g. a local SVG image on a browser that refuses local file access): the
+ * browser can still load the file as an image, so the picture stays visible
+ * instead of turning into an error block. Authored width/height/alt come from
+ * the placeholder's data-* attributes (set by createPlaceholderElement) and the
+ * source hash is carried over so DOM diff matching keeps working.
+ *
+ * @param placeholder - Placeholder element still present in the DOM
+ * @param url - Image URL, already resolved for the document context
+ * @param options - Source hash / plugin type for the data attributes
+ * @returns True when the placeholder was replaced
+ */
+export function replacePlaceholderWithImageUrl(
+  placeholder: HTMLElement,
+  url: string,
+  options: { sourceHash?: string | null; pluginType?: string | null } = {}
+): boolean {
+  if (!url) {
+    return false;
+  }
+
+  const sourceHash = options.sourceHash || placeholder.dataset?.sourceHash;
+  const pluginType = options.pluginType || placeholder.dataset?.pluginType || 'image';
+
+  const img = document.createElement('img');
+  // Property assignment rather than HTML parsing, matching the other plugin
+  // result elements (see createPluginResultElement).
+  img.src = url;
+  img.alt = placeholder.dataset?.alt || '';
+  // Authored <img> attributes from the markdown source keep standard semantics.
+  if (placeholder.dataset?.width) {
+    img.setAttribute('width', placeholder.dataset.width);
+  }
+  if (placeholder.dataset?.height) {
+    img.setAttribute('height', placeholder.dataset.height);
+  }
+  if (sourceHash) {
+    img.dataset.sourceHash = sourceHash;
+    img.dataset.pluginType = pluginType;
+    img.dataset.pluginRendered = 'true';
+  }
+
+  placeholder.replaceWith(img);
+  return true;
+}
+
+/**
  * Replace placeholder with rendered content in DOM
  * @param id - Placeholder element ID
  * @param result - Render result with base64, width, height, format

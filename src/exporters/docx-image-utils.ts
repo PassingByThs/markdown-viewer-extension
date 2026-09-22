@@ -259,6 +259,25 @@ export function isSvgImage(url: string, contentType: string | null = null): bool
 }
 
 /**
+ * Check whether fetched bytes are a PNG raster rather than markup.
+ *
+ * A platform that cannot hand us the file may still recover the picture by
+ * loading it as an image element and rasterising it (see the Firefox document
+ * service), in which case an `.svg` URL yields PNG bytes. Callers must not
+ * decode those as SVG text.
+ *
+ * @param buffer - Fetched content
+ * @returns True when the buffer starts with the PNG signature
+ */
+export function isPngBuffer(buffer: Uint8Array): boolean {
+  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (buffer.length < signature.length) {
+    return false;
+  }
+  return signature.every((byte, index) => buffer[index] === byte);
+}
+
+/**
  * Convert SVG content to PNG using renderer
  * @param svgContent - SVG content string
  * @param renderer - Renderer instance with render() method

@@ -170,11 +170,16 @@ export function createToolbarManager(options: ToolbarManagerOptions): ToolbarMan
       downloadBtn.classList.remove('downloading');
       downloadBtn.removeAttribute('data-original-content');
     } catch (error) {
-      console.error('Export error:', error);
-      const alertDetail = (error as Error)?.message ? `: ${(error as Error).message}` : '';
-      const alertMessage = translate('docx_export_failed_alert', [alertDetail])
-        || `Export failed${alertDetail}`;
-      alert(alertMessage);
+      const errorMessage = (error as Error)?.message || '';
+      // A cancelled export is not a failure: the user backed out of the prompt
+      // asking for local files, so nothing is reported.
+      if (errorMessage !== 'Download cancelled by user') {
+        console.error('Export error:', error);
+        const alertDetail = errorMessage ? `: ${errorMessage}` : '';
+        const alertMessage = translate('docx_export_failed_alert', [alertDetail])
+          || `Export failed${alertDetail}`;
+        alert(alertMessage);
+      }
 
       const originalContent = downloadBtn.getAttribute('data-original-content') || `
         <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
