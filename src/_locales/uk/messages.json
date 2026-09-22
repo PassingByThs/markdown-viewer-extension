@@ -291,26 +291,6 @@
     "message": "Дозволити доступ до локальних файлів",
     "description": "Button that requests local file access"
   },
-  "local_file_access_title": {
-    "message": "Local images cannot be read",
-    "description": "Title of the local file access prompt"
-  },
-  "local_file_access_message": {
-    "message": "Firefox blocks this extension from reading local files, so the images in folder {0} cannot be embedded. Choose the folder that contains them - the selected files stay on your machine and are only read for this document.",
-    "description": "Prompt shown when the folder name is known"
-  },
-  "local_file_access_message_generic": {
-    "message": "Firefox blocks this extension from reading local files, so local images in this document cannot be embedded. Choose the folder that contains them - the selected files stay on your machine and are only read for this document.",
-    "description": "Prompt shown without a folder name"
-  },
-  "local_file_access_pick": {
-    "message": "Choose folder",
-    "description": "Button that opens the folder picker"
-  },
-  "local_file_access_skip": {
-    "message": "Skip images this time",
-    "description": "Button that exports without embedding local images"
-  },
   "file_access_settings_link": {
     "message": "сторінку налаштувань розширення",
     "description": "Link text to extension settings"
@@ -394,6 +374,26 @@
   "lightbox_zoom_out": {
     "message": "Зменшити масштаб",
     "description": "Tooltip for zooming out in the diagram lightbox"
+  },
+  "local_file_access_message": {
+    "message": "Firefox не дозволяє цьому розширенню читати локальні файли, тому зображення з папки {0} не вдасться вбудувати. Виберіть папку, що їх містить, — вибрані файли залишаються на вашому комп’ютері й читаються лише для цього документа.",
+    "description": "Prompt shown when the folder name is known"
+  },
+  "local_file_access_message_generic": {
+    "message": "Firefox не дозволяє цьому розширенню читати локальні файли, тому локальні зображення в цьому документі не вдасться вбудувати. Виберіть папку, що їх містить, — вибрані файли залишаються на вашому комп’ютері й читаються лише для цього документа.",
+    "description": "Prompt shown without a folder name"
+  },
+  "local_file_access_pick": {
+    "message": "Вибрати папку",
+    "description": "Button that opens the folder picker"
+  },
+  "local_file_access_skip": {
+    "message": "Експортувати без зображень",
+    "description": "Button that exports without embedding local images"
+  },
+  "local_file_access_title": {
+    "message": "Не вдалося прочитати локальні зображення",
+    "description": "Title of the local file access prompt"
   },
   "more": {
     "message": "Більше",

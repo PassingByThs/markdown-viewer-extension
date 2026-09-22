@@ -11,6 +11,7 @@ const SCAN_DIRS = {
   // Platform-specific TypeScript code
   chrome: path.join(ROOT_DIR, 'chrome/src'),
   chromeRoot: path.join(ROOT_DIR, 'chrome'), // For manifest.json
+  firefox: path.join(ROOT_DIR, 'firefox'), // src/ plus manifest.json
   vscode: path.join(ROOT_DIR, 'vscode/src'),
   mobileSrc: path.join(ROOT_DIR, 'mobile/src'),
   // Flutter/Dart code
@@ -198,7 +199,7 @@ export function findI18nKeysInCode() {
   }
 
   // Scan TypeScript/JavaScript directories
-  const tsDirs = [SCAN_DIRS.src, SCAN_DIRS.chrome, SCAN_DIRS.chromeRoot, SCAN_DIRS.vscode, SCAN_DIRS.mobileSrc];
+  const tsDirs = [SCAN_DIRS.src, SCAN_DIRS.chrome, SCAN_DIRS.chromeRoot, SCAN_DIRS.firefox, SCAN_DIRS.vscode, SCAN_DIRS.mobileSrc];
   for (const dir of tsDirs) {
     if (fs.existsSync(dir)) {
       scanDirectory(dir, ['.js', '.ts', '.html']);

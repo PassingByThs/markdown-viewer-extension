@@ -291,26 +291,6 @@
     "message": "Aktifkan akses file lokal",
     "description": "Button that requests local file access"
   },
-  "local_file_access_title": {
-    "message": "Local images cannot be read",
-    "description": "Title of the local file access prompt"
-  },
-  "local_file_access_message": {
-    "message": "Firefox blocks this extension from reading local files, so the images in folder {0} cannot be embedded. Choose the folder that contains them - the selected files stay on your machine and are only read for this document.",
-    "description": "Prompt shown when the folder name is known"
-  },
-  "local_file_access_message_generic": {
-    "message": "Firefox blocks this extension from reading local files, so local images in this document cannot be embedded. Choose the folder that contains them - the selected files stay on your machine and are only read for this document.",
-    "description": "Prompt shown without a folder name"
-  },
-  "local_file_access_pick": {
-    "message": "Choose folder",
-    "description": "Button that opens the folder picker"
-  },
-  "local_file_access_skip": {
-    "message": "Skip images this time",
-    "description": "Button that exports without embedding local images"
-  },
   "file_access_settings_link": {
     "message": "halaman pengaturan ekstensi",
     "description": "Link text to extension settings"
@@ -394,6 +374,26 @@
   "lightbox_zoom_out": {
     "message": "Perkecil",
     "description": "Tooltip for zooming out in the diagram lightbox"
+  },
+  "local_file_access_message": {
+    "message": "Firefox melarang ekstensi ini membaca file lokal, sehingga gambar di folder {0} tidak dapat disematkan. Pilih folder yang memuatnya - file yang dipilih tetap ada di komputer Anda dan hanya dibaca untuk dokumen ini.",
+    "description": "Prompt shown when the folder name is known"
+  },
+  "local_file_access_message_generic": {
+    "message": "Firefox melarang ekstensi ini membaca file lokal, sehingga gambar lokal di dokumen ini tidak dapat disematkan. Pilih folder yang memuatnya - file yang dipilih tetap ada di komputer Anda dan hanya dibaca untuk dokumen ini.",
+    "description": "Prompt shown without a folder name"
+  },
+  "local_file_access_pick": {
+    "message": "Pilih folder",
+    "description": "Button that opens the folder picker"
+  },
+  "local_file_access_skip": {
+    "message": "Ekspor tanpa gambar kali ini",
+    "description": "Button that exports without embedding local images"
+  },
+  "local_file_access_title": {
+    "message": "Gambar lokal tidak dapat dibaca",
+    "description": "Title of the local file access prompt"
   },
   "more": {
     "message": "More",

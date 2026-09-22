@@ -291,26 +291,6 @@
     "message": "Bật truy cập tệp cục bộ",
     "description": "Button that requests local file access"
   },
-  "local_file_access_title": {
-    "message": "Local images cannot be read",
-    "description": "Title of the local file access prompt"
-  },
-  "local_file_access_message": {
-    "message": "Firefox blocks this extension from reading local files, so the images in folder {0} cannot be embedded. Choose the folder that contains them - the selected files stay on your machine and are only read for this document.",
-    "description": "Prompt shown when the folder name is known"
-  },
-  "local_file_access_message_generic": {
-    "message": "Firefox blocks this extension from reading local files, so local images in this document cannot be embedded. Choose the folder that contains them - the selected files stay on your machine and are only read for this document.",
-    "description": "Prompt shown without a folder name"
-  },
-  "local_file_access_pick": {
-    "message": "Choose folder",
-    "description": "Button that opens the folder picker"
-  },
-  "local_file_access_skip": {
-    "message": "Skip images this time",
-    "description": "Button that exports without embedding local images"
-  },
   "file_access_settings_link": {
     "message": "trang cài đặt tiện ích",
     "description": "Link text to extension settings"
@@ -394,6 +374,26 @@
   "lightbox_zoom_out": {
     "message": "Thu nhỏ",
     "description": "Tooltip for zooming out in the diagram lightbox"
+  },
+  "local_file_access_message": {
+    "message": "Firefox không cho phép tiện ích này đọc tệp cục bộ, vì vậy không thể nhúng ảnh trong thư mục {0}. Hãy chọn thư mục chứa chúng - các tệp đã chọn vẫn ở trên máy của bạn và chỉ được đọc cho tài liệu này.",
+    "description": "Prompt shown when the folder name is known"
+  },
+  "local_file_access_message_generic": {
+    "message": "Firefox không cho phép tiện ích này đọc tệp cục bộ, vì vậy không thể nhúng ảnh cục bộ trong tài liệu này. Hãy chọn thư mục chứa chúng - các tệp đã chọn vẫn ở trên máy của bạn và chỉ được đọc cho tài liệu này.",
+    "description": "Prompt shown without a folder name"
+  },
+  "local_file_access_pick": {
+    "message": "Chọn thư mục",
+    "description": "Button that opens the folder picker"
+  },
+  "local_file_access_skip": {
+    "message": "Lần này xuất không kèm ảnh",
+    "description": "Button that exports without embedding local images"
+  },
+  "local_file_access_title": {
+    "message": "Không thể đọc ảnh cục bộ",
+    "description": "Title of the local file access prompt"
   },
   "more": {
     "message": "More",

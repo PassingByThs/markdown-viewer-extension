@@ -291,26 +291,6 @@
     "message": "Autoriser l'accès aux fichiers locaux",
     "description": "Button that requests local file access"
   },
-  "local_file_access_title": {
-    "message": "Local images cannot be read",
-    "description": "Title of the local file access prompt"
-  },
-  "local_file_access_message": {
-    "message": "Firefox blocks this extension from reading local files, so the images in folder {0} cannot be embedded. Choose the folder that contains them - the selected files stay on your machine and are only read for this document.",
-    "description": "Prompt shown when the folder name is known"
-  },
-  "local_file_access_message_generic": {
-    "message": "Firefox blocks this extension from reading local files, so local images in this document cannot be embedded. Choose the folder that contains them - the selected files stay on your machine and are only read for this document.",
-    "description": "Prompt shown without a folder name"
-  },
-  "local_file_access_pick": {
-    "message": "Choose folder",
-    "description": "Button that opens the folder picker"
-  },
-  "local_file_access_skip": {
-    "message": "Skip images this time",
-    "description": "Button that exports without embedding local images"
-  },
   "file_access_settings_link": {
     "message": "page des paramètres de l'extension",
     "description": "Link text to extension settings"
@@ -394,6 +374,26 @@
   "lightbox_zoom_out": {
     "message": "Zoom arrière",
     "description": "Tooltip for zooming out in the diagram lightbox"
+  },
+  "local_file_access_message": {
+    "message": "Firefox empêche cette extension de lire les fichiers locaux, les images du dossier {0} ne peuvent donc pas être intégrées. Choisissez le dossier qui les contient : les fichiers sélectionnés restent sur votre ordinateur et ne sont lus que pour ce document.",
+    "description": "Prompt shown when the folder name is known"
+  },
+  "local_file_access_message_generic": {
+    "message": "Firefox empêche cette extension de lire les fichiers locaux, les images locales de ce document ne peuvent donc pas être intégrées. Choisissez le dossier qui les contient : les fichiers sélectionnés restent sur votre ordinateur et ne sont lus que pour ce document.",
+    "description": "Prompt shown without a folder name"
+  },
+  "local_file_access_pick": {
+    "message": "Choisir un dossier",
+    "description": "Button that opens the folder picker"
+  },
+  "local_file_access_skip": {
+    "message": "Exporter sans images cette fois",
+    "description": "Button that exports without embedding local images"
+  },
+  "local_file_access_title": {
+    "message": "Les images locales ne peuvent pas être lues",
+    "description": "Title of the local file access prompt"
   },
   "more": {
     "message": "Plus",

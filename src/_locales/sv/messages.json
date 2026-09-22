@@ -291,26 +291,6 @@
     "message": "Tillåt åtkomst till lokala filer",
     "description": "Button that requests local file access"
   },
-  "local_file_access_title": {
-    "message": "Local images cannot be read",
-    "description": "Title of the local file access prompt"
-  },
-  "local_file_access_message": {
-    "message": "Firefox blocks this extension from reading local files, so the images in folder {0} cannot be embedded. Choose the folder that contains them - the selected files stay on your machine and are only read for this document.",
-    "description": "Prompt shown when the folder name is known"
-  },
-  "local_file_access_message_generic": {
-    "message": "Firefox blocks this extension from reading local files, so local images in this document cannot be embedded. Choose the folder that contains them - the selected files stay on your machine and are only read for this document.",
-    "description": "Prompt shown without a folder name"
-  },
-  "local_file_access_pick": {
-    "message": "Choose folder",
-    "description": "Button that opens the folder picker"
-  },
-  "local_file_access_skip": {
-    "message": "Skip images this time",
-    "description": "Button that exports without embedding local images"
-  },
   "file_access_settings_link": {
     "message": "tilläggets inställningssida",
     "description": "Link text to extension settings"
@@ -394,6 +374,26 @@
   "lightbox_zoom_out": {
     "message": "Zooma ut",
     "description": "Tooltip for zooming out in the diagram lightbox"
+  },
+  "local_file_access_message": {
+    "message": "Firefox hindrar tillägget från att läsa lokala filer, så bilderna i mappen {0} kan inte bäddas in. Välj mappen som innehåller dem – de valda filerna stannar på din dator och läses bara för det här dokumentet.",
+    "description": "Prompt shown when the folder name is known"
+  },
+  "local_file_access_message_generic": {
+    "message": "Firefox hindrar tillägget från att läsa lokala filer, så lokala bilder i det här dokumentet kan inte bäddas in. Välj mappen som innehåller dem – de valda filerna stannar på din dator och läses bara för det här dokumentet.",
+    "description": "Prompt shown without a folder name"
+  },
+  "local_file_access_pick": {
+    "message": "Välj mapp",
+    "description": "Button that opens the folder picker"
+  },
+  "local_file_access_skip": {
+    "message": "Exportera utan bilder den här gången",
+    "description": "Button that exports without embedding local images"
+  },
+  "local_file_access_title": {
+    "message": "Lokala bilder kan inte läsas",
+    "description": "Title of the local file access prompt"
   },
   "more": {
     "message": "More",
