@@ -37,6 +37,8 @@ export class EchartsRenderer extends BaseRenderer {
   private static readonly DEFAULT_WIDTH = 800;
   /** Default chart height when no hint is provided in the option */
   private static readonly DEFAULT_HEIGHT = 450;
+  /** Extra breathing room added when content extends beyond the requested frame */
+  private static readonly EXPORT_PADDING = 8;
 
   constructor() {
     super('echarts');
@@ -145,29 +147,41 @@ export class EchartsRenderer extends BaseRenderer {
       // Wait again after setOption to ensure the canvas is fully painted
       await this.waitForFinished(chart);
 
-      // Calculate scale for PNG dimensions (clamped to canvas limits)
-      const scale = this.clampCanvasDimensions(width, height, this.calculateCanvasScale(themeConfig));
+      const svgElement = container.querySelector('svg');
+      const exportBounds = svgElement
+        ? this.measureSvgContentBounds(svgElement, width, height)
+        : { minX: 0, minY: 0, maxX: width, maxY: height };
+      const adjustedExport = this.expandSvgExport(
+        chart.renderToSVGString(),
+        exportBounds,
+        width,
+        height,
+      );
 
-      // SVG representation from the svg renderer.
-      const svg = chart.renderToSVGString();
+      // Calculate scale for PNG dimensions (clamped to canvas limits)
+      const scale = this.clampCanvasDimensions(
+        adjustedExport.width,
+        adjustedExport.height,
+        this.calculateCanvasScale(themeConfig),
+      );
 
       // Render the SVG to a canvas for the PNG (same path as PlantUML/Mermaid:
       // the svg renderer's own getDataURL('png') does not produce a valid
       // bitmap).
       const canvas = await this.renderSvgToCanvas(
-        svg,
-        Math.round(width * scale),
-        Math.round(height * scale),
+        adjustedExport.svg,
+        Math.round(adjustedExport.width * scale),
+        Math.round(adjustedExport.height * scale),
       );
       const pngDataUrl = canvas.toDataURL('image/png', 1.0);
       const base64Data = pngDataUrl.replace(/^data:image\/png;base64,/, '');
 
       return {
         base64: base64Data,
-        width: Math.round(width * scale),
-        height: Math.round(height * scale),
+        width: Math.round(adjustedExport.width * scale),
+        height: Math.round(adjustedExport.height * scale),
         format: 'png',
-        svg,
+        svg: adjustedExport.svg,
       };
     } finally {
       chart.dispose();
@@ -194,5 +208,82 @@ export class EchartsRenderer extends BaseRenderer {
       // Fallback: resolve after 500ms even if finished never fires
       const timer = setTimeout(finish, 500);
     });
+  }
+
+  /**
+   * Measure the union bbox of rendered SVG elements so exports can include
+   * content that ECharts paints beyond the nominal canvas height/width.
+   */
+  private measureSvgContentBounds(
+    svgElement: SVGSVGElement,
+    fallbackWidth: number,
+    fallbackHeight: number,
+  ): { minX: number; minY: number; maxX: number; maxY: number } {
+    let minX = 0;
+    let minY = 0;
+    let maxX = fallbackWidth;
+    let maxY = fallbackHeight;
+
+    const graphicNodes = svgElement.querySelectorAll(
+      'path, rect, circle, ellipse, line, polyline, polygon, text, image, g',
+    );
+
+    for (const node of graphicNodes) {
+      if (!(node instanceof SVGGraphicsElement)) {
+        continue;
+      }
+      try {
+        const box = node.getBBox();
+        if (!Number.isFinite(box.x) || !Number.isFinite(box.y)) {
+          continue;
+        }
+        if (box.width === 0 && box.height === 0) {
+          continue;
+        }
+        minX = Math.min(minX, box.x);
+        minY = Math.min(minY, box.y);
+        maxX = Math.max(maxX, box.x + box.width);
+        maxY = Math.max(maxY, box.y + box.height);
+      } catch {
+        // Some SVG nodes do not support getBBox in all cases; ignore them.
+      }
+    }
+
+    return { minX, minY, maxX, maxY };
+  }
+
+  /**
+   * Expand the exported SVG root box when the rendered content exceeds the
+   * requested width/height. This keeps PNG rasterization from clipping.
+   */
+  private expandSvgExport(
+    svgContent: string,
+    bounds: { minX: number; minY: number; maxX: number; maxY: number },
+    fallbackWidth: number,
+    fallbackHeight: number,
+  ): { svg: string; width: number; height: number } {
+    const padding = EchartsRenderer.EXPORT_PADDING;
+    const viewBoxX = Math.floor(Math.min(0, bounds.minX) - padding);
+    const viewBoxY = Math.floor(Math.min(0, bounds.minY) - padding);
+    const maxX = Math.ceil(Math.max(fallbackWidth, bounds.maxX) + padding);
+    const maxY = Math.ceil(Math.max(fallbackHeight, bounds.maxY) + padding);
+    const exportWidth = maxX - viewBoxX;
+    const exportHeight = maxY - viewBoxY;
+
+    if (exportWidth === fallbackWidth && exportHeight === fallbackHeight && viewBoxX === 0 && viewBoxY === 0) {
+      return { svg: svgContent, width: fallbackWidth, height: fallbackHeight };
+    }
+
+    const doc = new DOMParser().parseFromString(svgContent, 'image/svg+xml');
+    const svgRoot = doc.documentElement;
+    svgRoot.setAttribute('width', String(exportWidth));
+    svgRoot.setAttribute('height', String(exportHeight));
+    svgRoot.setAttribute('viewBox', `${viewBoxX} ${viewBoxY} ${exportWidth} ${exportHeight}`);
+
+    return {
+      svg: new XMLSerializer().serializeToString(doc),
+      width: exportWidth,
+      height: exportHeight,
+    };
   }
 }
