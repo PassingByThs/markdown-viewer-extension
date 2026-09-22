@@ -79,6 +79,7 @@ export const bridge: PlatformBridgeAPI = {
 
 import { BaseDocumentService } from '../../../src/services/document-service';
 import type { ReadFileOptions } from '../../../src/types/platform';
+import { isRootRelativeUrl } from '../../../src/utils/document-url';
 import { loadImageAsBuffer } from '../../../src/utils/image-loader';
 import {
   readFromPickedFiles,
@@ -114,6 +115,15 @@ import {
  */
 class FirefoxDocumentService extends BaseDocumentService {
   async readFile(absolutePath: string, options?: ReadFileOptions): Promise<string> {
+    // Same reasoning as Chrome: a root-relative path (`/assets/logo.png`) follows
+    // the document's own origin. On a remote document that is the site, so it is
+    // resolved against the page URL instead of becoming `file:///assets/...`.
+    if (isRootRelativeUrl(absolutePath)
+      && typeof window !== 'undefined'
+      && window.location?.protocol !== 'file:') {
+      return this.readRelativeFile(absolutePath, options);
+    }
+
     return this.readUrl(toFileUrl(absolutePath), options);
   }
 

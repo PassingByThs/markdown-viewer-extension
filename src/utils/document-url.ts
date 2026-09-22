@@ -82,6 +82,18 @@ export function ensureRelativeDotSlash(url: string): string {
 }
 
 /**
+ * True when a path belongs to the root of the location hosting the document,
+ * e.g. `/assets/logo.png` (and the protocol-relative `//host/logo.png`).
+ *
+ * Such a path is not necessarily a filesystem path: the root it belongs to is
+ * the disk for a local document but the site for a remote one, so callers must
+ * let the platform document service decide how to read it.
+ */
+export function isRootRelativeUrl(url: string): boolean {
+  return url.startsWith('/');
+}
+
+/**
  * Split href into path and hash fragment (without leading '#').
  */
 export function splitPathAndFragment(href: string): { path: string; fragment?: string } {

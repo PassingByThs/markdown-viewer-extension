@@ -23,6 +23,7 @@ import { OffscreenRenderHost } from './hosts/offscreen-render-host';
 
 import { ServiceChannel } from '../../../src/messaging/channels/service-channel';
 import { ChromeRuntimeTransport } from '../transports/chrome-runtime-transport';
+import { isNetworkUrl, isRootRelativeUrl } from '../../../src/utils/document-url';
 
 // ============================================================================
 // Type Definitions
@@ -130,6 +131,15 @@ export class ChromeDocumentService extends BaseDocumentService {
   }
 
   async readFile(absolutePath: string, options?: ReadFileOptions): Promise<string> {
+    // A root-relative path belongs to the root of the document's own origin: on
+    // a remote document that is the site, not the disk, so it has to be resolved
+    // and read like a relative path (`new URL()` copes with the leading slash).
+    // Exports pass such paths to readFile() (`/assets/logo.png`), and without
+    // this they became `file:///assets/logo.png` and were lost.
+    if (isRootRelativeUrl(absolutePath) && isNetworkUrl(this._baseUrl)) {
+      return this.readRelativeFile(absolutePath, options);
+    }
+
     const filePath = absolutePath.startsWith('file://') ? absolutePath : `file://${absolutePath}`;
     // Send to background script for file reading
     const response = await serviceChannel.send('READ_LOCAL_FILE', {
@@ -163,7 +173,8 @@ export class ChromeDocumentService extends BaseDocumentService {
     // context: that keeps their credentials, and it works regardless of the
     // extension worker's CSP, host permissions or Private Network Access rules.
     // Cross-origin ones still go through the background, which MV3 makes the
-    // only context allowed to fetch them.
+    // only context allowed to fetch them — that path needs the `http: https:`
+    // entries in the extension's connect-src (see chrome/manifest.json).
     if (isSameOriginHttpUrl(absoluteUrl)) {
       return readSameOriginHttpUrl(absoluteUrl, options?.binary ?? false);
     }
