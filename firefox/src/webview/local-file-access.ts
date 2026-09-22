@@ -14,6 +14,10 @@
  * holding them. Those `File` objects are readable in full, which also restores
  * inline SVG and vector SVG in DOCX. The prompt runs at export time because a
  * file picker cannot be opened without a user gesture.
+ *
+ * The prompt is styled by `.mv-local-files-*` in ui/styles.css, which every
+ * content-script-hosted viewer injects, so it follows the current theme
+ * instead of carrying its own palette.
  */
 
 import Localization from '../../../src/utils/localization';
@@ -22,7 +26,7 @@ import Localization from '../../../src/utils/localization';
  * One file the user handed over, with the path it had inside the picked folder.
  */
 interface PickedFile {
-  /** Lower-case path as reported by the picker, e.g. `test/assets/logo.svg` */
+  /** Normalized path as reported by the picker, e.g. `test/assets/logo.svg` */
   path: string;
   file: File;
 }
@@ -45,8 +49,6 @@ const MAX_PICKED_FILES = 4000;
  */
 let localReadsWork = false;
 
-let stylesInjected = false;
-
 /**
  * Record that a local file was read through the regular paths.
  */
@@ -55,7 +57,9 @@ export function noteLocalReadSuccess(): void {
 }
 
 /**
- * Normalize a path for matching: lower case, forward slashes, no protocol.
+ * Normalize a path for matching: forward slashes, no protocol, no percent
+ * escapes. Case is kept — readFromPickedFiles falls back to a case-insensitive
+ * pass for platforms whose picker reports different casing.
  * @param value - Path or URL
  * @returns Comparable path
  */
@@ -69,8 +73,7 @@ function normalizePath(value: string): string {
   return path
     .replace(/\\/g, '/')
     .replace(/^file:\/+/i, '')
-    .replace(/\/+/g, '/')
-    .toLowerCase();
+    .replace(/\/+/g, '/');
 }
 
 /**
@@ -98,7 +101,9 @@ export async function readFromPickedFiles(url: string, binary: boolean): Promise
     if (!suffix) {
       continue;
     }
-    const match = pickedFiles.find((entry) => entry.path === suffix || entry.path.endsWith(`/${suffix}`));
+    // Exact casing first: on a case-sensitive filesystem `Logo.svg` and
+    // `logo.svg` are different files, and the picker reports the real one.
+    const match = findPickedFile(suffix, false) ?? findPickedFile(suffix, true);
     if (!match) {
       continue;
     }
@@ -107,6 +112,55 @@ export async function readFromPickedFiles(url: string, binary: boolean): Promise
   }
 
   return null;
+}
+
+/**
+ * Find the picked file matching a path suffix, preferring the closest match.
+ *
+ * A folder picked above the document makes every picked path longer than the
+ * one the document wrote, so the entry with the fewest extra leading segments
+ * wins, and an exact path match beats every suffix. Two different files that
+ * match equally well are reported: silently picking one would embed the wrong
+ * picture.
+ *
+ * @param suffix - Path tail to match (already normalized)
+ * @param ignoreCase - Match case-insensitively (Windows/macOS-style pickers)
+ * @returns The chosen file, or null when nothing matches
+ */
+function findPickedFile(suffix: string, ignoreCase: boolean): PickedFile | null {
+  const needle = ignoreCase ? suffix.toLowerCase() : suffix;
+  let best: PickedFile | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  let ambiguous = false;
+
+  for (const entry of pickedFiles) {
+    const candidate = ignoreCase ? entry.path.toLowerCase() : entry.path;
+    let score: number;
+    if (candidate === needle) {
+      score = -1; // Exact path: beats every suffix match.
+    } else if (candidate.endsWith(`/${needle}`)) {
+      score = candidate.length - needle.length;
+    } else {
+      continue;
+    }
+
+    if (score < bestScore) {
+      best = entry;
+      bestScore = score;
+      ambiguous = false;
+    } else if (score === bestScore && best && entry.path !== best.path) {
+      ambiguous = true;
+    }
+  }
+
+  if (ambiguous) {
+    console.warn(
+      `[LocalFileAccess] more than one selected file matches "${suffix}"; using ${best?.path}. `
+      + 'Pick the folder that holds this document\'s images to make the choice exact.'
+    );
+  }
+
+  return best;
 }
 
 /**
@@ -420,8 +474,6 @@ function pickFolder(): Promise<number> {
  */
 function showLocalFilePrompt(folderHint: string): Promise<LocalFilePromptAnswer> {
   return new Promise<LocalFilePromptAnswer>((resolve) => {
-    injectStyles();
-
     const overlay = document.createElement('div');
     overlay.className = 'mv-local-files-overlay';
     overlay.setAttribute('role', 'dialog');
@@ -480,98 +532,6 @@ function showLocalFilePrompt(folderHint: string): Promise<LocalFilePromptAnswer>
     document.body.appendChild(overlay);
     pick.focus();
   });
-}
-
-/**
- * Inject the prompt's stylesheet once.
- */
-function injectStyles(): void {
-  if (stylesInjected) {
-    return;
-  }
-  stylesInjected = true;
-
-  const style = document.createElement('style');
-  style.textContent = `
-.mv-local-files-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 2147483000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.35);
-}
-.mv-local-files-card {
-  max-width: 460px;
-  padding: 20px 22px;
-  border-radius: 10px;
-  background: #fff;
-  color: #24292f;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
-  font-family: inherit;
-  line-height: 1.5;
-}
-.mv-local-files-title {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 8px;
-}
-.mv-local-files-message {
-  font-size: 13px;
-  white-space: pre-line;
-}
-.mv-local-files-actions {
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-  margin-top: 18px;
-}
-.mv-local-files-button {
-  padding: 7px 14px;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  background: #f6f8fa;
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-.mv-local-files-button:hover {
-  background: #eef1f4;
-}
-.mv-local-files-primary {
-  border-color: #1f6feb;
-  background: #1f6feb;
-  color: #fff;
-}
-.mv-local-files-primary:hover {
-  background: #1a60cf;
-}
-@media (prefers-color-scheme: dark) {
-  .mv-local-files-card {
-    background: #1f2428;
-    color: #e6edf3;
-  }
-  .mv-local-files-button {
-    border-color: #444c56;
-    background: #2d333b;
-  }
-  .mv-local-files-button:hover {
-    background: #373e47;
-  }
-  .mv-local-files-primary {
-    border-color: #4184e4;
-    background: #4184e4;
-    color: #fff;
-  }
-  .mv-local-files-primary:hover {
-    background: #2f6fd0;
-  }
-}
-`;
-
-  (document.head || document.documentElement).appendChild(style);
 }
 
 /**

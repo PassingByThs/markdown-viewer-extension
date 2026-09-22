@@ -184,10 +184,10 @@ class FirefoxDocumentService extends BaseDocumentService {
  * Recover image bytes by rasterising the file through the document.
  *
  * `<img>` subresource loads are performed by the page itself (that is how local
- * images already render in the viewer), and a canvas that draws a local image is
- * left origin-clean on Firefox, so `toDataURL()` yields the pixels. This costs a
- * re-encode to PNG — hence it is only the last resort, after the paths that
- * preserve the original bytes.
+ * images already render in the viewer), and on Firefox a canvas that draws an
+ * image from the document's own directory is left origin-clean, so
+ * `toDataURL()` yields the pixels. This costs a re-encode to PNG — hence it is
+ * only the last resort, after the paths that preserve the original bytes.
  *
  * @param url - Absolute file:// URL of an image
  * @returns Base64-encoded PNG content
@@ -197,8 +197,8 @@ async function readImageElementAsPng(url: string): Promise<string> {
   if (!loaded) {
     // Tell the two reasons apart, because they need different fixes: the
     // document may have refused the file (nothing to do here), or it loaded it
-    // but keeps the pixels off-limits — a local file is its own origin in a
-    // default Firefox profile, which taints the canvas.
+    // but keeps the pixels off-limits — an image outside the document's own
+    // directory is its own origin to Firefox, which taints the canvas.
     const loadable = await canLoadAsImageElement(url);
     throw new Error(
       loadable
@@ -249,6 +249,27 @@ const PAGE_READ_TIMEOUT_MS = 2500;
 let pageReadUsable = true;
 
 /**
+ * Token that ties a helper reply to the request that asked for it.
+ *
+ * Content scripts match page messages by shape rather than by window identity
+ * (see readViaPageContext), so without a secret any page script could post a
+ * reply of its own and feed its bytes into the exported document.
+ *
+ * @returns Random hex token
+ */
+function createHelperNonce(): string {
+  const bytes = new Uint8Array(16);
+  if (globalThis.crypto && typeof globalThis.crypto.getRandomValues === 'function') {
+    globalThis.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/**
  * Read a local file with the page's own privileges, through an injected helper.
  *
  * A `file://` page can fetch files out of its own directory — that privilege
@@ -274,13 +295,16 @@ async function readViaPageContext(url: string, binary: boolean): Promise<string>
   }
 
   const requestId = `read-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  // Kept out of the DOM below (the helper element is removed as soon as it has
+  // run), so only the injected code knows it.
+  const nonce = createHelperNonce();
 
   return new Promise<string>((resolve, reject) => {
     const script = document.createElement('script');
     const helperSource = `
 (() => {
   const reply = (ok, data, error) => window.postMessage(
-    { source: ${JSON.stringify(PAGE_READ_MESSAGE_SOURCE)}, id: ${JSON.stringify(requestId)}, ok, data, error },
+    { source: ${JSON.stringify(PAGE_READ_MESSAGE_SOURCE)}, id: ${JSON.stringify(requestId)}, nonce: ${JSON.stringify(nonce)}, ok, data, error },
     '*'
   );
   fetch(${JSON.stringify(url)})
@@ -320,11 +344,11 @@ async function readViaPageContext(url: string, binary: boolean): Promise<string>
     }, PAGE_READ_TIMEOUT_MS);
 
     function onMessage(event: MessageEvent): void {
-      // Matched by shape rather than by window identity: content scripts see the
-      // page's message through an Xray wrapper, which identity checks survive
-      // only by accident.
-      const data = event.data as { source?: unknown; id?: unknown; ok?: unknown; data?: unknown; error?: unknown } | null;
-      if (!data || data.source !== PAGE_READ_MESSAGE_SOURCE || data.id !== requestId) {
+      // Matched by shape — a content script sees the page's message through an
+      // Xray wrapper, where identity checks only survive by accident — plus the
+      // nonce, which the page never sees.
+      const data = event.data as { source?: unknown; id?: unknown; nonce?: unknown; ok?: unknown; data?: unknown; error?: unknown } | null;
+      if (!data || data.source !== PAGE_READ_MESSAGE_SOURCE || data.id !== requestId || data.nonce !== nonce) {
         return;
       }
 
@@ -340,6 +364,9 @@ async function readViaPageContext(url: string, binary: boolean): Promise<string>
     window.addEventListener('message', onMessage);
     script.textContent = helperSource;
     document.documentElement.appendChild(script);
+    // Appending runs the helper synchronously, so the element can go right away:
+    // a page script can no longer read the nonce out of the injected source.
+    script.remove();
   });
 }
 

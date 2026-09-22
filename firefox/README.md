@@ -99,24 +99,24 @@ read them. Local file access (above) is only the first of two settings:
    The browser console reports the state of every read path and of the permission
    itself (`[DocumentService] Firefox could not read a local file…`).
 2. **Local file origin policy** — `security.fileuri.strict_origin_policy`
-   (default `true`) confines a local read to files in the **same directory**: a
-   document in `notes/` cannot read `notes/assets/image.png`, and neither the
-   extension nor the page can work around that. Setting it to `false` in
-   `about:config` (then restarting) treats local files as one origin, which is
-   what Chromium browsers do, and restores both local image display and image
-   embedding.
+   (default `true`) confines a local read to the document's **own directory**: a
+   document in `notes/` can read `notes/logo.svg` but not `notes/assets/logo.svg`,
+   and neither the extension nor the page can work around that. Setting it to
+   `false` in `about:config` (then restarting) treats local files as one origin,
+   which is what Chromium browsers do, and lets an export embed every local image.
 
-Until that policy is relaxed, Firefox has no way to hand the extension the bytes
-of a local image on its own: pages still display such images, because the browser
-loads them itself, but an export cannot embed them. The export therefore asks for
-the folder holding the images, once per document: a file picker is the one local
-read the browser always allows, so the selected files are embedded as they are
-(original bytes for images, vector SVG kept vector). Nothing is uploaded, no
-prompt appears when the regular reads already work, and the choice lasts until
-the page is reloaded.
+With that policy at its default, only same-directory images can be embedded on
+their own: an image from a subfolder still displays (the browser loads it
+itself), but its bytes stay out of reach. The export therefore asks for the
+folder holding them, once per document: a file picker is the one local read the
+browser always allows, so the selected files are embedded as they are (original
+bytes for images, vector SVG kept vector). Nothing is uploaded, no prompt appears
+when the regular reads already work, and the choice lasts until the page is
+reloaded.
 
-Note that reading an image's pixels through a canvas is not a substitute: the
-canvas stays tainted for local files, so no bytes can be recovered that way.
+A canvas is a fallback for the same-directory case only: the pixels of an image
+from another directory cannot be read back, because that file is its own origin
+to Firefox and taints the canvas.
 
 ### A web Markdown file still shows as plain text
 

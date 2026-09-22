@@ -1466,3 +1466,76 @@ html[data-code-view] #markdown-content pre code .mv-code-line-content:empty::bef
     height: auto !important;
   }
 }
+
+/* === Local file access prompt (Firefox export) === */
+
+/* Shown when a local document's images cannot be read for an export and the
+   user has to hand the folder over. Sits above the viewer's own chrome
+   (#toc-overlay uses 999, the panels 1000-1002). */
+.mv-local-files-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.mv-local-files-card {
+  max-width: 460px;
+  padding: 20px 22px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-floating);
+  line-height: 1.5;
+}
+
+.mv-local-files-title {
+  margin-bottom: 8px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.mv-local-files-message {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  white-space: pre-line;
+}
+
+.mv-local-files-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+.mv-local-files-button {
+  padding: 7px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-chrome);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mv-local-files-button:hover {
+  border-color: var(--color-border-hover);
+  background: var(--color-bg-body);
+}
+
+.mv-local-files-primary {
+  border-color: var(--color-theme-accent);
+  background: var(--color-theme-accent);
+  color: var(--color-text-on-primary);
+}
+
+.mv-local-files-primary:hover {
+  border-color: var(--color-theme-accent-hover);
+  background: var(--color-theme-accent-hover);
+}
