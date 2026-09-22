@@ -5,22 +5,13 @@
  */
 import { BasePlugin } from './base-plugin';
 import type { DocumentService } from '../types/platform';
+import type { ASTNode } from '../types/index';
 import {
   ensureRelativeDotSlash,
   isAbsoluteFilesystemPath,
   isDocumentRelativeUrl,
   isNetworkUrl,
 } from '../utils/document-url';
-
-/**
- * AST node interface for SVG plugin
- */
-interface AstNode {
-  type: string;
-  lang?: string;
-  value?: string;
-  url?: string;
-}
 
 export class SvgPlugin extends BasePlugin {
   private _currentNodeType: string | null = null;
@@ -36,7 +27,7 @@ export class SvgPlugin extends BasePlugin {
    * @param node - AST node
    * @returns SVG content or URL, or null if not applicable
    */
-  extractContent(node: AstNode): string | null {
+  extractContent(node: ASTNode): string | null {
     // Store node type for isInline() to use
     this._currentNodeType = node.type;
 

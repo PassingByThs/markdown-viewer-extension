@@ -9,7 +9,6 @@ import {
 } from 'docx';
 import type { UnifiedRenderResult } from '../types/index';
 import type {
-  ImageBufferResult,
   DOCXImageType,
 } from '../types/docx';
 
@@ -25,8 +24,6 @@ interface Renderer {
     height: number;
   }>;
 }
-
-type FetchImageAsBufferFunction = (url: string) => Promise<ImageBufferResult>;
 
 /**
  * Calculate appropriate image dimensions for DOCX to fit within page constraints
@@ -302,28 +299,4 @@ export async function convertSvgToPng(svgContent: string, renderer: Renderer): P
   };
 }
 
-/**
- * Get SVG content from URL or data URL
- * @param url - SVG URL or data URL
- * @param fetchImageAsBuffer - Function to fetch image as buffer
- * @returns SVG content string
- */
-export async function getSvgContent(url: string, fetchImageAsBuffer: FetchImageAsBufferFunction): Promise<string> {
-  // Handle data: URLs
-  if (url.startsWith('data:image/svg+xml')) {
-    const base64Match = url.match(/^data:image\/svg\+xml;base64,(.+)$/);
-    if (base64Match) {
-      return atob(base64Match[1]);
-    }
-    // Try URL encoded format
-    const urlMatch = url.match(/^data:image\/svg\+xml[;,](.+)$/);
-    if (urlMatch) {
-      return decodeURIComponent(urlMatch[1]);
-    }
-    throw new Error('Unsupported SVG data URL format');
-  }
-  
-  // Fetch SVG file (local or remote)
-  const { buffer } = await fetchImageAsBuffer(url);
-  return new TextDecoder().decode(buffer);
-}
+

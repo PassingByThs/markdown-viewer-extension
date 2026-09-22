@@ -3,19 +3,8 @@
  *
  * Run with:  npm run test:unit
  *
- * This needs the fibjs **dev** build, not an official release: the suite relies
- * on `node:test`, ESM and TypeScript loading, and CSSOM (`element.style`) — all
- * of which landed after v0.37.0, the newest official binary, which is why it
- * comes out of the `fibjs/dev` image instead (see .github/workflows/ci.yml):
- *
- *     docker create --name fibjs-extract fibjs/dev
- *     docker cp fibjs-extract:/usr/local/bin/fibjs ./fibjs
- *     docker rm fibjs-extract
- *
- * The extracted binary is a Linux ELF, so on Windows it has to be run through
- * WSL. Running an official release instead only produces module syntax errors.
- *
- * Installed-extension E2E tests run separately under Node.js via
+ * The whole suite passes under fibjs v0.38+ (node:test API, TS loading, and
+ * xml DOM). Installed-extension E2E tests run separately under Node.js via
  * `npm run test:e2e`, because browser automation belongs in a native Node.js
  * + Playwright process rather than this fibjs compatibility suite.
  *
