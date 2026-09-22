@@ -25,8 +25,9 @@ import { visit } from 'unist-util-visit';
 import rehypeImageUri from '../plugins/rehype-image-uri';
 import rehypeTableMerge from '../plugins/rehype-table-merge';
 import { registerRemarkPlugins } from '../plugins/index';
-import { createPlaceholderElement } from '../plugins/plugin-content-utils';
+import { createErrorHTML, createPlaceholderElement } from '../plugins/plugin-content-utils';
 import { replacePlaceholderWithImageUrl } from '../plugins/plugin-html-utils';
+import { recordRenderDiagnostic } from './render-diagnostics';
 import { syncBlockHtmlFromDOM } from './viewer/viewer-controller';
 import { generateContentHash, hashCode } from '../utils/hash';
 import { isDocumentRelativeUrl } from '../utils/document-url';
@@ -493,7 +494,8 @@ export class AsyncTaskManager {
       plugin?.isInline?.() || false,
       this.translate,
       sourceHash,
-      hasImgAttrs ? imgAttrs : null
+      hasImgAttrs ? imgAttrs : null,
+      sourceLine
     );
 
     return {
@@ -575,7 +577,22 @@ export class AsyncTaskManager {
             } else {
               const errorDetail = escapeHtml(task.error?.message || this.translate('async_unknown_error'));
               const localizedError = this.translate('async_processing_error', [errorDetail]);
-              placeholder.outerHTML = `<pre style="background: #fee; border-left: 4px solid #f00; padding: 10px; font-size: 12px;">${localizedError}</pre>`;
+              // Same signal the console carries, in structured form: the block
+              // could not be fetched and nothing was rendered in its place.
+              recordRenderDiagnostic({
+                level: 'error',
+                kind: 'resource-failed',
+                type: task.type,
+                line: typeof task.data.sourceLine === 'number' ? task.data.sourceLine : null,
+                blockId: task.id,
+                message: task.error?.message || this.translate('async_unknown_error'),
+              });
+              placeholder.outerHTML = createErrorHTML(localizedError, {
+                pluginType: task.type,
+                sourceLine: typeof task.data.sourceLine === 'number' ? task.data.sourceLine : null,
+                blockId: task.id,
+                stage: 'fetch',
+              });
             }
           }
         } else {
@@ -589,11 +606,23 @@ export class AsyncTaskManager {
         // Concise warning: the error is already shown in the document via the
         // placeholder error block — a stack trace here is noise in CLI logs.
         console.warn(`[TaskManager] Task failed for ${task.id}: ${(error as Error).message}`);
+        recordRenderDiagnostic({
+          level: 'error',
+          kind: 'render-failed',
+          type: task.type,
+          line: typeof task.data.sourceLine === 'number' ? task.data.sourceLine : null,
+          blockId: task.id,
+          message: (error as Error).message,
+        });
         const placeholder = document.getElementById(task.id);
         if (placeholder) {
           const errorDetail = escapeHtml((error as Error).message || '');
           const localizedError = this.translate('async_task_processing_error', [errorDetail]);
-          placeholder.outerHTML = `<pre style="background: #fee; border-left: 4px solid #f00; padding: 10px; font-size: 12px;">${localizedError}</pre>`;
+          placeholder.outerHTML = createErrorHTML(localizedError, {
+            pluginType: task.type,
+            sourceLine: typeof task.data.sourceLine === 'number' ? task.data.sourceLine : null,
+            blockId: task.id,
+          });
         }
         if (onError) onError(error as Error, task);
       } finally {

@@ -32,6 +32,39 @@ export interface DiagramResult {
   height: number;
 }
 
+/** Mirrors CliAssetEntry in src/cli/browser-renderer.ts (one exportable asset). */
+export interface AssetEntry {
+  index: number;
+  kind: 'diagram' | 'image';
+  type: string;
+  line: number | null;
+  blockId: string | null;
+  alt: string;
+  src?: string;
+  pngBase64?: string;
+  svg?: string;
+  imageBase64?: string;
+  contentType?: string;
+  width: number | null;
+  height: number | null;
+  error?: string;
+}
+
+/** Mirrors RenderDiagnostic in src/core/render-diagnostics.ts. */
+export interface RenderDiagnosticEntry {
+  level: 'error' | 'warning';
+  kind: string;
+  type?: string | null;
+  line?: number | null;
+  blockId?: string | null;
+  message: string;
+}
+
+export interface AssetsResult {
+  assets: AssetEntry[];
+  diagnostics: RenderDiagnosticEntry[];
+}
+
 declare global {
   interface Window {
     markdownCli: {
@@ -42,6 +75,8 @@ declare global {
       renderBookDom(request: unknown): Promise<BookDomSnapshot>;
       renderBookEpub(request: unknown): Promise<{ filename: string; base64: string }>;
       renderDiagram(request: unknown): Promise<DiagramResult>;
+      collectAssets(request: unknown): Promise<AssetsResult>;
+      diagnostics(): RenderDiagnosticEntry[];
       renderDocx(request: unknown): Promise<{ filename: string; base64: string }>;
       renderBookDocx(request: unknown): Promise<{ filename: string; base64: string }>;
       renderPdf(request: unknown): Promise<void>;
@@ -338,6 +373,21 @@ export interface BrowserRenderHarness {
     relativePath: string,
     overrides?: Partial<BrowserRenderRequest> & { timeoutMs?: number },
   ): Promise<DiagramResult>;
+  /**
+   * Walk the rendered document for its exportable figures and images (the
+   * documd `--assets` page API), optionally restricted to some kinds and to
+   * the png/svg diagram payload.
+   */
+  collectAssets(
+    inputPath: string,
+    overrides?: Partial<BrowserRenderRequest> & {
+      timeoutMs?: number;
+      kinds?: Array<'diagram' | 'image'>;
+      diagramFormat?: 'png' | 'svg';
+    },
+  ): Promise<AssetsResult>;
+  /** Structured render diagnostics of the last render in this page. */
+  diagnostics(): Promise<RenderDiagnosticEntry[]>;
   /** Run the REAL DOCX export pipeline and return the .docx bytes. */
   renderDocx(
     inputPath: string,
@@ -781,6 +831,36 @@ export async function createBrowserRenderHarness(options: { inputPath: string; c
         fileReadUrl: server.fileReadUrl,
         resourceBaseUrl: server.resourceBaseUrl,
       }), timeoutMs);
+    },
+    async collectAssets(targetPath: string, overrides = {}) {
+      const resolved = path.resolve(targetPath);
+      const markdown = await fs.readFile(resolved, 'utf8');
+      const timeoutMs = overrides.timeoutMs ?? 180_000;
+      return withTimeout(page.evaluate((request) => {
+        return window.markdownCli.collectAssets(request);
+      }, {
+        markdown,
+        filename: overrides.filename || path.basename(resolved),
+        title: overrides.title,
+        theme: overrides.theme || 'default',
+        language: overrides.language || 'en',
+        frontmatterDisplay: overrides.frontmatterDisplay || 'hide',
+        tableMergeEmpty: overrides.tableMergeEmpty ?? false,
+        tableLayout: overrides.tableLayout || 'center',
+        imageLayout: overrides.imageLayout || 'center',
+        diagramLayout: overrides.diagramLayout || 'center',
+        firstLineIndent: overrides.firstLineIndent ?? 0,
+        documentPath: resolved,
+        documentDir: path.dirname(resolved),
+        documentBaseUrl: server.documentBaseUrl,
+        fileReadUrl: server.fileReadUrl,
+        resourceBaseUrl: server.resourceBaseUrl,
+        kinds: overrides.kinds,
+        diagramFormat: overrides.diagramFormat,
+      }), timeoutMs);
+    },
+    async diagnostics() {
+      return page.evaluate(() => window.markdownCli.diagnostics());
     },
     async measureEpubReader(targetPath: string, selectors: string[], env: EpubReaderEnvironment, overrides = {}) {
       const resolved = path.resolve(targetPath);

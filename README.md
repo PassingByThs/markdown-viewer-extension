@@ -38,6 +38,18 @@ npm run documd -- report.md --frontmatter table --merge-empty-cells
 npm run documd -- night.md night.pdf --theme midnight
 ```
 
+It can also export just the figures and images of a document (all of them, or
+by number/kind), and it reports any figure or image that failed to render:
+
+```bash
+npm run documd -- report.md --assets ./figures
+npm run documd -- report.md --assets ./figures --only 1,3 --format svg
+```
+
+The conversion exits non-zero when a figure or image did not render, naming the
+markdown line, the engine and the reason; `--no-fail-on-error` keeps the exit
+code at 0 when a pipeline only wants the report.
+
 Run `npm run documd -- --help` for all options. Theme IDs are listed in
 `src/themes/registry.json`.
 

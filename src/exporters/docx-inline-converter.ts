@@ -11,6 +11,7 @@ import {
 } from 'docx';
 import { convertLatex2Math } from './docx-math-converter';
 import { isNetworkUrl } from '../utils/document-url';
+import { recordRenderDiagnostic } from '../core/render-diagnostics';
 import {
   calculateImageDimensions,
   getImageDimensions,
@@ -529,6 +530,14 @@ export function createInlineConverter({
       // Concise warning — the error text is already shown inside the DOCX as
       // a red placeholder; a stack trace here is noise in CLI logs.
       console.warn(`[DOCX] Failed to load image: ${node.url} — ${(error as Error).message}`);
+      recordRenderDiagnostic({
+        level: 'error',
+        kind: 'resource-failed',
+        type: 'image',
+        line: (node as { position?: { start?: { line?: number } } }).position?.start?.line ?? null,
+        blockId: null,
+        message: (error as Error).message,
+      });
       reportResourceProgress();
 
       return new TextRun({

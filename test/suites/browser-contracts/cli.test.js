@@ -5,7 +5,13 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
-import { ensureOutputDirectory, parseArgs, parseSummaryPages } from '../../../scripts/documd.js';
+import {
+  assetFileName,
+  ensureOutputDirectory,
+  formatAssetReport,
+  parseArgs,
+  parseSummaryPages,
+} from '../../../scripts/documd.js';
 import { DEFAULT_RENDER_SETTINGS } from '../../../src/config/defaults.ts';
 
 describe('Markdown HTML CLI arguments', () => {
@@ -207,6 +213,112 @@ describe('CLI output format', () => {  it('defaults markdown input to html', () 
       () => parseArgs(['SUMMARY.md', '--book', '--format', 'html']),
       /--book requires --format epub, docx or pdf/,
     );
+  });
+});
+
+describe('documd --assets (export figures and images)', () => {
+  it('defaults to exporting every asset as png', () => {
+    const options = parseArgs(['report.md', '--assets', './figures']);
+    assert.equal(options.assetsDir, './figures');
+    assert.equal(options.assetKind, 'all');
+    assert.equal(options.format, 'png', 'figures default to png');
+    assert.equal(options.failOnError, true, 'a failed render fails the run by default');
+  });
+
+  it('parses --kind, --only and --format svg', () => {
+    const options = parseArgs([
+      'report.md',
+      '--assets', 'figs',
+      '--kind', 'diagrams',
+      '--only', '1,3',
+      '--format', 'svg',
+    ]);
+    assert.equal(options.assetKind, 'diagrams');
+    assert.equal(options.format, 'svg');
+    assert.deepEqual([...options.onlyIndexes].sort((a, b) => a - b), [1, 3]);
+  });
+
+  it('relaxes the exit code on demand', () => {
+    assert.equal(parseArgs(['report.md', '--no-fail-on-error']).failOnError, false);
+    assert.equal(parseArgs(['report.md', '--fail-on-error']).failOnError, true);
+  });
+
+  it('rejects asset options that would do nothing or mean the wrong thing', () => {
+    assert.throws(
+      () => parseArgs(['report.md', '--kind', 'images']),
+      /--kind requires --assets/,
+    );
+    assert.throws(
+      () => parseArgs(['report.md', '--only', '1']),
+      /--only requires --assets/,
+    );
+    assert.throws(
+      () => parseArgs(['report.md', '--assets', 'figs', '--kind', 'photos']),
+      /--kind must be all, diagrams, or images/,
+    );
+    assert.throws(
+      () => parseArgs(['report.md', '--assets', 'figs', '--only', '0']),
+      /--only takes asset numbers/,
+    );
+    assert.throws(
+      () => parseArgs(['report.md', '--assets', 'figs', '--only', 'first']),
+      /--only takes asset numbers/,
+    );
+    assert.throws(
+      () => parseArgs(['report.md', '--assets', 'figs', '--format', 'html']),
+      /--assets exports figures as png or svg/,
+    );
+    assert.throws(
+      () => parseArgs(['report.md', '--assets', 'figs', '--book']),
+      /--book is not supported/,
+    );
+    assert.throws(
+      () => parseArgs(['chart.mmd', '--assets', 'figs']),
+      /is a diagram source/,
+    );
+    assert.throws(
+      () => parseArgs(['report.md', 'out.html', '--assets', 'figs']),
+      /--assets writes into its own directory/,
+    );
+  });
+
+  it('names files by document-order number so --only names the same asset back', () => {
+    const diagram = { index: 2, kind: 'diagram', type: 'mermaid' };
+    assert.equal(
+      assetFileName(diagram, { documentBase: 'report.md', diagramFormat: 'png' }),
+      'report-02-mermaid.png',
+    );
+    assert.equal(
+      assetFileName(diagram, { documentBase: 'report.md', diagramFormat: 'svg' }),
+      'report-02-mermaid.svg',
+    );
+
+    const image = { index: 1, kind: 'image', src: 'https://example.com/img/photo.JPEG' };
+    assert.equal(
+      assetFileName(image, { documentBase: 'report', diagramFormat: 'png' }),
+      'report-01-photo.jpeg',
+      'an image keeps its original extension',
+    );
+  });
+
+  it('reports every asset with its number, location and outcome', () => {
+    const assets = [
+      { index: 1, kind: 'image', src: 'assets/icon.png', line: 6 },
+      { index: 2, kind: 'diagram', type: 'mermaid', line: 8, error: 'Parse error on line 1' },
+      { index: 3, kind: 'diagram', type: 'mermaid', line: 16 },
+    ];
+    const report = formatAssetReport(
+      assets,
+      [{ assetIndex: 1, fileName: 'report-01-icon.png' }],
+      { input: 'report.md' },
+    );
+
+    assert.match(report, /^report\.md: 2 diagrams, 1 image \(3 assets\)$/m);
+    assert.match(report, /report-01-icon\.png/, 'a written asset names its file');
+    assert.match(report, /line 6/, 'an asset names its markdown line');
+    assert.match(report, /failed: Parse error on line 1/, 'a failed asset names the reason');
+    assert.match(report, /skipped/, 'an unselected asset says so instead of looking failed');
+    assert.match(report, /line 16/, 'line numbers are padded into a column');
   });
 });
 

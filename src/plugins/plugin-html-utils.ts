@@ -5,6 +5,7 @@
 
 import type { PluginRenderResult, UnifiedRenderResult } from '../types/index';
 import { registerDiagramExport } from '../ui/diagram-export-registry';
+import { recordRenderDiagnostic } from '../core/render-diagnostics';
 
 /**
  * Convert unified plugin render result to HTML string
@@ -89,7 +90,13 @@ export function createPluginResultElement(
 
   if (renderResult.type === 'error') {
     const pre = document.createElement('pre');
-    pre.style.cssText = 'background: #fee; border-left: 4px solid #f00; padding: 10px; font-size: 12px;';
+    // Same contract as createErrorHTML: the class + data attributes are how a
+    // host finds the blocks a document lost, independent of the message text
+    // (which is translated and therefore locale-dependent).
+    pre.className = 'mv-plugin-error';
+    pre.dataset.pluginType = pluginType;
+    pre.dataset.pluginStage = 'render';
+    pre.style.cssText = 'background: #fee; color: #8b0000; border-left: 4px solid #f00; padding: 10px; font-size: 12px; white-space: pre-wrap; word-break: break-word;';
     pre.textContent = renderResult.content.text || '';
     return pre;
   }
@@ -195,6 +202,11 @@ export function replacePlaceholderWithImageUrl(
     img.dataset.pluginType = pluginType;
     img.dataset.pluginRendered = 'true';
   }
+  // The degraded image keeps the block's source location, so an asset export
+  // can still name where this figure came from.
+  if (placeholder.dataset?.sourceLine) {
+    img.dataset.sourceLine = placeholder.dataset.sourceLine;
+  }
 
   placeholder.replaceWith(img);
   return true;
@@ -222,6 +234,14 @@ export function replacePlaceholderWithImage(id: string, result: PluginRenderResu
       console.warn(
         `[PluginTask] ${pluginType} result dropped for ${id}: source hash changed (rendered ${expectedSourceHash}, current ${sourceHash})`,
       );
+      recordRenderDiagnostic({
+        level: 'warning',
+        kind: 'block-superseded',
+        type: pluginType,
+        line: Number(placeholder.dataset?.sourceLine) || null,
+        blockId: id,
+        message: 'a newer render superseded this block before the result arrived',
+      });
       return;
     }
 
@@ -250,12 +270,33 @@ export function replacePlaceholderWithImage(id: string, result: PluginRenderResu
       alt: placeholder.dataset.alt || null,
     });
     if (element) {
+      // Carry the source location from the placeholder onto the rendered
+      // element: diagnostics report failures by markdown line, and a host that
+      // walks the rendered document (documd's asset export) anchors each figure
+      // to the same line. The placeholder id travels along as the block's
+      // stable identity, so a rendered figure and a diagnostic about that block
+      // name the same thing.
+      const sourceLine = placeholder.dataset?.sourceLine;
+      if (sourceLine) {
+        element.setAttribute('data-source-line', sourceLine);
+      }
+      if (id) {
+        element.setAttribute('data-block-id', id);
+      }
       placeholder.replaceWith(element);
     } else {
       // createPluginResultElement rejects results it cannot render (e.g. a missing
       // base64 payload). Removing the placeholder then leaves a gap with no other
       // trace, so report the block that was lost.
       console.warn(`[PluginTask] ${pluginType} result could not be turned into an element for ${id} — the block will be missing`);
+      recordRenderDiagnostic({
+        level: 'error',
+        kind: 'block-missing',
+        type: pluginType,
+        line: Number(placeholder.dataset?.sourceLine) || null,
+        blockId: id,
+        message: 'the rendered result could not be turned into an element — the block will be missing',
+      });
       placeholder.remove();
     }
 

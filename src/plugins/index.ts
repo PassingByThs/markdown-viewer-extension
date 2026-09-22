@@ -22,6 +22,7 @@ import { PlantumlPlugin } from './plantuml-plugin';
 import { EchartsPlugin } from './echarts-plugin';
 import { replacePlaceholderWithImage } from './plugin-html-utils';
 import { createErrorHTML, withNodeSourceInfo } from './plugin-content-utils';
+import { recordRenderDiagnostic } from '../core/render-diagnostics';
 import { convertPluginResultToDOCX, withBlockImageAlignment } from '../exporters/docx-exporter';
 import { syncBlockHtmlFromDOM } from '../core/viewer/viewer-controller';
 import type { BasePlugin } from './base-plugin';
@@ -172,9 +173,18 @@ export function registerRemarkPlugins(
                     // The renderer resolved without producing anything. Removing the
                     // placeholder leaves a gap in the document, so say why instead of
                     // leaving the reader (and the logs) with nothing.
+                    const noResultLine = typeof data.sourceLine === 'number' ? data.sourceLine : null;
                     console.warn(
-                      `[PluginTask] ${plugin.type} produced no result for ${id}${typeof data.sourceLine === 'number' ? ` (line ${data.sourceLine})` : ''} — the block will be missing`,
+                      `[PluginTask] ${plugin.type} produced no result for ${id}${noResultLine ? ` (line ${noResultLine})` : ''} — the block will be missing`,
                     );
+                    recordRenderDiagnostic({
+                      level: 'error',
+                      kind: 'block-missing',
+                      type: plugin.type,
+                      line: noResultLine,
+                      blockId: id,
+                      message: 'the renderer produced no result — the block will be missing',
+                    });
                     const placeholder = document.getElementById(id);
                     if (placeholder) {
                       placeholder.remove();
@@ -194,12 +204,24 @@ export function registerRemarkPlugins(
                   console.warn(
                     `[PluginTask] ${plugin.type} render failed for ${id}${sourceLine ? ` (line ${sourceLine})` : ''}: ${(error as Error).message}`,
                   );
+                  recordRenderDiagnostic({
+                    level: 'error',
+                    kind: 'render-failed',
+                    type: plugin.type,
+                    line: sourceLine,
+                    blockId: id,
+                    message: (error as Error).message,
+                  });
                   const placeholder = document.getElementById(id);
                   if (placeholder) {
                     const errorDetail = escapeHtml((error as Error).message || '');
                     const localizedError = translate('async_processing_error', [plugin.type, errorDetail]) 
                       || `${plugin.type} error: ${errorDetail}`;
-                    placeholder.outerHTML = createErrorHTML(localizedError);
+                    placeholder.outerHTML = createErrorHTML(localizedError, {
+                      pluginType: plugin.type,
+                      sourceLine,
+                      blockId: id,
+                    });
                     // Also sync error state to memory
                     syncBlockHtmlFromDOM(id);
                   }
@@ -314,12 +336,23 @@ export async function convertNodeToDOCX(
 
   // Report plugin failures once, as a concise warning with the source line —
   // the error text is also carried into the DOCX itself via the error result.
+  // The diagnostic is what lets a host (the documd CLI) fail the conversion
+  // instead of only printing a line a batch render would scroll past.
   if (renderResult.type === 'error') {
     const position = (node as { position?: { start?: { line?: number } } }).position;
     const line = position?.start?.line;
+    const reason = renderResult.content.text || 'the engine failed to render this block';
     console.warn(
-      `[PluginTask] ${plugin.type} render failed${line ? ` (line ${line})` : ''}: ${renderResult.content.text}`,
+      `[PluginTask] ${plugin.type} render failed${line ? ` (line ${line})` : ''}: ${reason}`,
     );
+    recordRenderDiagnostic({
+      level: 'error',
+      kind: 'render-failed',
+      type: plugin.type,
+      line: typeof line === 'number' ? line : null,
+      blockId: null,
+      message: reason,
+    });
   }
 
   // Block diagrams/charts should follow the user's diagram alignment setting in DOCX.

@@ -106,6 +106,15 @@ export default function rehypeImageUri() {
         return;
       }
 
+      // Carry the markdown line of the image into the DOM. Render diagnostics
+      // and asset exports (documd --assets) report and locate images by source
+      // line, exactly like the plugin placeholders do.
+      const sourceLine = node.position?.start?.line;
+      if (typeof sourceLine === 'number' && sourceLine > 0) {
+        node.properties = node.properties || {};
+        node.properties['data-source-line'] = String(sourceLine);
+      }
+
       // Fix data:application/octet-stream URLs (always apply)
       if (src.toLowerCase().startsWith('data:application/octet-stream;base64,')) {
         const fixedSrc = fixOctetStreamDataUrl(src);

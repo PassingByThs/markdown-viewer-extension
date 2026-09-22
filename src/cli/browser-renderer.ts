@@ -4,6 +4,8 @@ import { exportToHtml } from '../exporters/html-exporter';
 import { collectEpubCss } from '../exporters/export-styles';
 import { exportEpubFlow } from '../core/viewer/viewer-host';
 import { renderMarkdownDocument, resetDocument } from '../core/viewer/viewer-controller';
+import { clearRenderDiagnostics, getRenderDiagnostics, type RenderDiagnostic } from '../core/render-diagnostics';
+import { clearDiagramExports, getDiagramExport } from '../ui/diagram-export-registry';
 import { handleRender, initRenderEnvironment } from '../renderers/render-worker-core';
 import { loadAndApplyTheme } from '../utils/theme-to-css';
 import type { DocumentService, PlatformAPI } from '../types/platform';
@@ -86,6 +88,54 @@ export interface CliDiagramResult {
   height: number;
 }
 
+/**
+ * Asset export request: render the document and walk what it produced. The
+ * kinds and the diagram payload format are the only knobs — everything else
+ * (theme, layouts, frontmatter) matches a normal render, so the exported
+ * figures are the figures the document shows.
+ */
+export interface CliAssetRequest extends CliBrowserRenderRequest {
+  /** Asset kinds to collect (default: both, in document order). */
+  kinds?: Array<'diagram' | 'image'>;
+  /** Diagram payload: `png` (rendered pixels, default) or `svg` (engine vector). */
+  diagramFormat?: 'png' | 'svg';
+}
+
+/** One exportable asset, already resolved to bytes (or to why it has none). */
+export interface CliAssetEntry {
+  /** 1-based document-order index across the collected kinds. */
+  index: number;
+  kind: 'diagram' | 'image';
+  /** Diagram engine (plantuml, mermaid, html, svg, ...) or `image`. */
+  type: string;
+  /** 1-based markdown source line, when the pipeline knew it. */
+  line: number | null;
+  /** Placeholder id of the block this asset came from, when there is one. */
+  blockId: string | null;
+  /** Alt text carried by the rendered element. */
+  alt: string;
+  /** Source URL of an image asset (how it was read). */
+  src?: string;
+  /** Diagram PNG payload (base64, no data: prefix). */
+  pngBase64?: string;
+  /** Diagram SVG payload, when the engine produces one. */
+  svg?: string;
+  /** Image bytes, copied from the source resource (base64). */
+  imageBase64?: string;
+  /** MIME type of the image bytes. */
+  contentType?: string;
+  width: number | null;
+  height: number | null;
+  /** Why this asset cannot be exported (render failure, unreadable image, ...). */
+  error?: string;
+}
+
+export interface CliAssetsResult {
+  assets: CliAssetEntry[];
+  /** Structured render problems collected while the document rendered. */
+  diagnostics: RenderDiagnostic[];
+}
+
 type CliBrowserApi = {
   render(request: CliBrowserRenderRequest): Promise<string>;
   snapshotDom(request: CliBrowserRenderRequest): Promise<CliBrowserDomSnapshot>;
@@ -96,6 +146,10 @@ type CliBrowserApi = {
     request: CliBrowserRenderRequest & { pages: CliBookPageInput[]; tocEntries?: CliBookTocEntryInput[]; bookTitle?: string; captureProgressTrace?: boolean },
   ): Promise<{ filename: string; base64: string; progressTrace?: CliBookExportProgressSample[]; totalElapsedMs?: number }>;
   renderDiagram(request: CliDiagramRequest & { theme?: string }): Promise<CliDiagramResult>;
+  /** Walk the rendered document and return every exportable figure and image. */
+  collectAssets(request: CliAssetRequest): Promise<CliAssetsResult>;
+  /** Structured problems the render pipeline recorded during the last render. */
+  diagnostics(): RenderDiagnostic[];
   renderDocx(request: CliBrowserRenderRequest): Promise<{ filename: string; base64: string }>;
   renderBookDocx(
     request: CliBrowserRenderRequest & { pages: CliBookPageInput[]; tocEntries?: CliBookTocEntryInput[]; bookTitle?: string; captureProgressTrace?: boolean },
@@ -225,6 +279,11 @@ function createDocumentService(request: CliBrowserRenderRequest): DocumentServic
 function configurePlatform(request: CliBrowserRenderRequest): DocumentService {
   const documentService = createDocumentService(request);
   const resourceBaseUrl = new URL(request.resourceBaseUrl);
+
+  // Every page API starts with the same clean slate: diagnostics and the
+  // diagram export registry describe one render, not the whole page session.
+  clearRenderDiagnostics();
+  clearDiagramExports();
 
   const renderer = {
     async init(): Promise<void> {},
@@ -590,6 +649,212 @@ async function renderDiagram(request: CliDiagramRequest): Promise<CliDiagramResu
   };
 }
 
+// ── Asset export ─────────────────────────────────────────────────────────────
+// collectAssets walks the RENDERED document instead of re-parsing the markdown:
+// every figure the reader sees is already in the DOM, carrying the engine that
+// produced it, the source hash its intermediate formats are registered under
+// and — through the placeholder that preceded it — the markdown line it came
+// from. Plain images are returned as their original bytes; the export copies
+// resources, it never re-encodes them.
+
+const DATA_URL_PATTERN = /^data:([^;,]+)?((?:;[^,]+)*?),(.*)$/s;
+
+function decodeDataUrl(url: string): { base64: string; contentType: string } {
+  const match = url.match(DATA_URL_PATTERN);
+  if (!match) {
+    throw new Error('invalid data URL');
+  }
+  const contentType = match[1] || 'application/octet-stream';
+  const payload = match[3] || '';
+  if (/;base64/i.test(match[2] || '')) {
+    return { base64: payload, contentType };
+  }
+  return {
+    base64: bytesToBase64(new TextEncoder().encode(decodeURIComponent(payload))),
+    contentType,
+  };
+}
+
+/** Read an image through the page: inline payload, document server or network. */
+async function readImageBytes(src: string): Promise<{ base64: string; contentType: string }> {
+  if (src.startsWith('data:')) {
+    return decodeDataUrl(src);
+  }
+  const response = await fetch(src);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const contentType = (response.headers.get('content-type') || '').split(';')[0].trim();
+  return { base64: bytesToBase64(bytes), contentType };
+}
+
+/** Markdown line of a rendered element (placeholders and images carry it). */
+function sourceLineOf(element: HTMLElement | null): number | null {
+  const line = Number(element?.dataset?.sourceLine);
+  return Number.isFinite(line) && line > 0 ? line : null;
+}
+
+/**
+ * Document line of a plain image.
+ *
+ * Unlike plugin placeholders (whose reports already add the block offset),
+ * image attributes come straight from the remark AST of a block that was
+ * parsed on its own — so the block's own `data-line` has to be added back to
+ * name the real line of the document.
+ */
+function imageDocumentLine(image: HTMLImageElement): number | null {
+  const relative = sourceLineOf(image);
+  if (relative === null) {
+    return null;
+  }
+  const blockStart = Number(image.closest('[data-line]')?.getAttribute('data-line'));
+  return Number.isFinite(blockStart) && blockStart >= 0 ? blockStart + relative : relative;
+}
+
+function renderedSize(image: HTMLImageElement | null): { width: number | null; height: number | null } {
+  if (!image || !image.naturalWidth) {
+    return { width: null, height: null };
+  }
+  return { width: image.naturalWidth, height: image.naturalHeight };
+}
+
+function requestedKinds(request: CliAssetRequest): Set<'diagram' | 'image'> {
+  const kinds = request.kinds && request.kinds.length > 0 ? request.kinds : (['diagram', 'image'] as const);
+  return new Set<'diagram' | 'image'>(kinds);
+}
+
+/**
+ * Collect every diagram and image in the rendered document, in document order.
+ *
+ * Classification follows the DOM, not the markdown: an element the diagram
+ * pipeline rendered (`data-plugin-rendered`) is a figure — its payload is the
+ * engine's SVG or the pixels the page shows — and anything else that is an
+ * `<img>` is an image, copied verbatim. Blocks that failed are returned too, as
+ * entries with an `error` and no payload, so a caller can report them by index,
+ * engine and line instead of only seeing a missing file.
+ */
+async function collectAssets(request: CliAssetRequest): Promise<CliAssetsResult> {
+  await renderContent(request);
+
+  const content = document.getElementById('markdown-content');
+  if (!(content instanceof HTMLElement)) {
+    throw new Error('CLI renderer page is missing its Markdown containers');
+  }
+
+  const kinds = requestedKinds(request);
+  const diagramFormat = request.diagramFormat === 'svg' ? 'svg' : 'png';
+  // Reasons of the failures this render reported, by block: the error block in
+  // the document carries a localized message, while the diagnostic carries the
+  // engine's own reason. The report prefers the diagnostic, so a failure reads
+  // as a cause instead of a placeholder phrase.
+  const diagnosticReasons = new Map<string, string>();
+  for (const diagnostic of getRenderDiagnostics()) {
+    if (diagnostic.level === 'error' && diagnostic.blockId && diagnostic.message) {
+      diagnosticReasons.set(diagnostic.blockId, diagnostic.message);
+    }
+  }
+  const nodes = Array.from(
+    content.querySelectorAll<HTMLElement>('.diagram-block, img, .mv-plugin-error, .async-placeholder'),
+  );
+  const assets: CliAssetEntry[] = [];
+
+  for (const node of nodes) {
+    // The <img> inside a rendered block is that block's payload, not an asset
+    // of its own; only the block element counts.
+    if (node instanceof HTMLImageElement && node.closest('.diagram-block')) {
+      continue;
+    }
+
+    const isPlaceholder = node.classList.contains('async-placeholder');
+    const isErrorBlock = node.classList.contains('mv-plugin-error');
+    const isRenderedDiagram =
+      node.classList.contains('diagram-block') ||
+      (node instanceof HTMLImageElement && node.dataset.pluginRendered === 'true');
+
+    if (isPlaceholder || isErrorBlock || isRenderedDiagram) {
+      if (!kinds.has('diagram')) continue;
+      const image = node instanceof HTMLImageElement ? node : node.querySelector('img');
+      const type = node.dataset.pluginType || image?.dataset.pluginType || 'diagram';
+      const sourceHash = node.dataset.sourceHash || image?.dataset.sourceHash || '';
+      const blockId = node.id || node.dataset.blockId || null;
+      const entry: CliAssetEntry = {
+        index: 0,
+        kind: 'diagram',
+        type,
+        line: sourceLineOf(node),
+        blockId,
+        alt: image?.alt || '',
+        ...renderedSize(image),
+      };
+
+      if (isPlaceholder) {
+        entry.error = 'the block was never rendered';
+      } else if (isErrorBlock) {
+        entry.error =
+          (blockId && diagnosticReasons.get(blockId)) ||
+          (node.textContent || '').trim().replace(/\s+/g, ' ') ||
+          'the block failed to render';
+      } else if (diagramFormat === 'svg') {
+        const exported = sourceHash ? getDiagramExport(sourceHash) : undefined;
+        if (exported?.svg) {
+          entry.svg = exported.svg;
+          entry.type = exported.pluginType || type;
+        } else {
+          entry.error = `${type} produced no SVG; export with --format png instead`;
+        }
+      } else {
+        const src = image?.getAttribute('src') || '';
+        try {
+          if (!src.startsWith('data:')) {
+            throw new Error('the rendered figure carries no inline payload');
+          }
+          entry.pngBase64 = decodeDataUrl(src).base64;
+        } catch (error) {
+          entry.error = error instanceof Error ? error.message : String(error);
+        }
+      }
+
+      assets.push(entry);
+      continue;
+    }
+
+    // A plain image: copied in its original format, never re-encoded.
+    if (!kinds.has('image')) continue;
+    const image = node as HTMLImageElement;
+    const src = image.getAttribute('src') || '';
+    const entry: CliAssetEntry = {
+      index: 0,
+      kind: 'image',
+      type: 'image',
+      line: imageDocumentLine(image),
+      blockId: null,
+      alt: image.alt || '',
+      src,
+      ...renderedSize(image),
+    };
+    try {
+      const bytes = await readImageBytes(src);
+      entry.imageBase64 = bytes.base64;
+      entry.contentType = bytes.contentType;
+      if (image.complete && image.naturalWidth === 0) {
+        entry.error = 'the image did not load in the rendered document';
+      }
+    } catch (error) {
+      entry.error = `unreadable: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    assets.push(entry);
+  }
+
+  // Index in document order, so `documd --assets --only 2` names the same
+  // asset before and after a filter is applied.
+  assets.forEach((asset, position) => {
+    asset.index = position + 1;
+  });
+
+  return { assets, diagnostics: getRenderDiagnostics() };
+}
+
 function toDocxFilename(filename: string): string {
   let docxFilename = filename || 'document.docx';
   if (docxFilename.toLowerCase().endsWith('.md')) {
@@ -729,6 +994,8 @@ window.markdownCli = {
   renderBookDom,
   renderBookEpub,
   renderDiagram,
+  collectAssets,
+  diagnostics: getRenderDiagnostics,
   renderDocx,
   renderBookDocx,
   renderPdf,

@@ -22,6 +22,9 @@ import type {
  * @param translate - Translation function
  * @param sourceHash - Content hash for DOM diff matching
  * @param imgAttrs - Authored <img> attributes (width/height/alt) to carry into the placeholder so the rendered replacement can apply them
+ * @param sourceLine - 1-based markdown line of the block, carried into the DOM so
+ *   an error block (and a host inspecting the rendered document) can name the
+ *   real source location instead of only the placeholder id
  * @returns Placeholder HTML
  */
 export function createPlaceholderElement(
@@ -30,7 +33,8 @@ export function createPlaceholderElement(
   isInline: boolean,
   translate: TranslateFunction,
   sourceHash?: string,
-  imgAttrs?: { width?: string | null; height?: string | null; alt?: string | null } | null
+  imgAttrs?: { width?: string | null; height?: string | null; alt?: string | null } | null,
+  sourceLine?: number | null
 ): string {
   // Generate translation key dynamically based on type
   const typeLabelKey = `async_placeholder_type_${pluginType.replace(/-/g, '')}`;
@@ -46,6 +50,12 @@ export function createPlaceholderElement(
     ? `data-source-hash="${sourceHash}" data-plugin-type="${pluginType}"` 
     : '';
 
+  // Source line for diagnostics: an export can report "line 42" for a block
+  // without parsing the console output.
+  const lineAttr = typeof sourceLine === 'number' && sourceLine > 0
+    ? ` data-source-line="${sourceLine}"`
+    : '';
+
   // Authored <img> attributes survive the takeover via data-* attributes on
   // the placeholder; replacePlaceholderWithImage reads them back and applies
   // them to the rendered <img> element.
@@ -57,7 +67,7 @@ export function createPlaceholderElement(
     : '';
 
   if (isInline) {
-    return `<span id="${id}" class="async-placeholder ${pluginType}-placeholder inline-placeholder" ${dataAttrs}${imgDataAttrs}>
+    return `<span id="${id}" class="async-placeholder ${pluginType}-placeholder inline-placeholder" ${dataAttrs}${lineAttr}${imgDataAttrs}>
       <span class="async-loading">
         <span class="async-spinner"></span>
         <span class="async-text">${processingText}</span>
@@ -65,7 +75,7 @@ export function createPlaceholderElement(
     </span>`;
   }
 
-  return `<div id="${id}" class="async-placeholder ${pluginType}-placeholder" ${dataAttrs}${imgDataAttrs}>
+  return `<div id="${id}" class="async-placeholder ${pluginType}-placeholder" ${dataAttrs}${lineAttr}${imgDataAttrs}>
     <div class="async-loading">
       <div class="async-spinner"></div>
       <div class="async-text">${processingText}</div>
@@ -82,6 +92,36 @@ function escapeHtmlAttr(value: string): string {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+/** Context a failed block can carry into its error element. */
+export interface PluginErrorInfo {
+  /** Plugin / diagram type that failed. */
+  pluginType?: string | null;
+  /** 1-based markdown line of the block. */
+  sourceLine?: number | null;
+  /** Placeholder id the error block replaced. */
+  blockId?: string | null;
+  /** What failed: the render itself or fetching the block's source. */
+  stage?: 'render' | 'fetch' | null;
+}
+
+/**
+ * Build the data attributes of an error block. The class and the data-* pair
+ * are the contract a host reads to find the blocks a document lost (e.g. the
+ * CLI's diagram-error report walks `.mv-plugin-error[data-source-line]`),
+ * rather than matching the localized message text.
+ */
+export function pluginErrorAttributes(info?: PluginErrorInfo | null): string {
+  if (!info) return '';
+  const attrs: string[] = [];
+  if (info.pluginType) attrs.push(`data-plugin-type="${escapeHtmlAttr(info.pluginType)}"`);
+  if (typeof info.sourceLine === 'number' && info.sourceLine > 0) {
+    attrs.push(`data-source-line="${info.sourceLine}"`);
+  }
+  if (info.blockId) attrs.push(`data-block-id="${escapeHtmlAttr(info.blockId)}"`);
+  attrs.push(`data-plugin-stage="${info.stage || 'render'}"`);
+  return attrs.join(' ');
 }
 
 /**
@@ -113,13 +153,17 @@ export function withNodeSourceInfo(
 /**
  * Create error HTML
  * @param errorMessage - Localized error message
+ * @param info - Block context (type, source line, stage), exposed as data-
+ *   attributes so a host can locate and report the blocks a document lost
  * @returns Error HTML
  */
-export function createErrorHTML(errorMessage: string): string {
+export function createErrorHTML(errorMessage: string, info?: PluginErrorInfo | null): string {
+  const attrs = pluginErrorAttributes(info);
+  const contextAttrs = attrs ? ` ${attrs}` : '';
   // Explicit color + background so the block stays readable under both light
   // and dark themes (inherited text color would otherwise be light in dark
   // themes and become illegible on the light pink background).
-  return `<pre style="background: #fee; color: #8b0000; border-left: 4px solid #f00; padding: 10px; font-size: 12px; white-space: pre-wrap; word-break: break-word;">${errorMessage}</pre>`;
+  return `<pre class="mv-plugin-error"${contextAttrs} style="background: #fee; color: #8b0000; border-left: 4px solid #f00; padding: 10px; font-size: 12px; white-space: pre-wrap; word-break: break-word;">${errorMessage}</pre>`;
 }
 
 // PluginRenderer is defined in src/types/plugin.ts

@@ -78,12 +78,64 @@ documd SUMMARY.md --book --format docx   # merged DOCX
 documd SUMMARY.md --book --format pdf    # one page per chapter
 ```
 
+## Exporting figures and images
+
+`--assets <dir>` writes the figures and images a Markdown document shows into
+`<dir>` — the rendered result, not a re-parse of the source: each figure keeps
+the engine that drew it, images are copied byte for byte.
+
+```bash
+documd report.md --assets ./figures                  # every figure and image
+documd report.md --assets ./figures --kind diagrams  # figures only
+documd report.md --assets ./figures --only 1,3       # select by number
+documd report.md --assets ./figures --format svg     # figures as SVG, not PNG
+```
+
+The report lists every asset with the number `--only` takes back, its markdown
+line and its outcome:
+
+```
+report.md: 2 diagrams, 1 image (3 assets)
+  1  image    icon48.png  line 6   -> report-01-icon48.png
+  2  diagram  mermaid     line 8   -> report-02-mermaid.png
+  3  diagram  mermaid     line 15  skipped
+```
+
+Files are named `<document>-<number>-<label>.<ext>`, so a row and a file always
+name the same asset. Numbering is document order, so `--only 2` selects the same
+figure with or without other filters.
+
+## Render errors and exit codes
+
+A document whose figures or images fail to render is not the document it looks
+like, so documd reports every failure with its markdown line, its type and the
+engine's reason — and exits non-zero:
+
+```
+$ documd report.md report.docx
+Render errors (2):
+  line 11  mermaid  No diagram type detected matching given configuration for text: invalid syntax here
+  line 15  image    Failed to fetch image: assets/missing.png - Unable to read resource (404): ...
+Exported /path/report.docx
+documd: 2 render errors; pass --no-fail-on-error to export anyway
+```
+
+The document is still written (a failed figure stays visible as an error block
+in it), so the output always lets you see what went wrong. Pass
+`--no-fail-on-error` when a pipeline only wants the report and not the failure,
+e.g. when a missing optional image should not stop a batch conversion.
+
 ## Options
 
 | Option | Description |
 |---|---|
-| `--format <f>` | html, epub, docx, pdf, svg, png, drawio |
+| `--format <f>` | html, epub, docx, pdf, svg, png, drawio (with `--assets`: png or svg figures) |
 | `-b, --book` | Whole-book export (input: GitBook SUMMARY.md) |
+| `--assets <dir>` | Export the document's figures and images into `<dir>` |
+| `--kind <k>` | With `--assets`: all (default), diagrams, or images |
+| `--only <list>` | With `--assets`: 1-based asset numbers, e.g. `1,3` |
+| `--fail-on-error` | Exit non-zero when a figure or image fails (default) |
+| `--no-fail-on-error` | Report render failures but still exit 0 |
 | `--diagram-type <t>` | Diagram renderer override |
 | `-t, --theme <id>` | Viewer theme id |
 | `--title <text>` | Document title |
@@ -104,3 +156,5 @@ documd SUMMARY.md --book --format pdf    # one page per chapter
 - Requires Chrome; pass `--chrome` to use a specific binary.
 - Themes, fonts, code highlighting, math and layout settings mirror the
   docu.md Markdown Viewer extension.
+- Report file paths go to stdout; warnings and render-error reports go to
+  stderr, so a script can read the paths and let the failures print.

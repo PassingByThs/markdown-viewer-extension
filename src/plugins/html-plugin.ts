@@ -6,6 +6,7 @@
 import { BasePlugin } from './base-plugin.ts';
 import { sanitizeAndCheck } from '../utils/html-sanitizer.ts';
 import { loadImageAsDataUrl } from '../utils/image-loader.ts';
+import { recordRenderDiagnostic } from '../core/render-diagnostics.ts';
 import type { DocumentService } from '../types/platform';
 import {
   ensureRelativeDotSlash,
@@ -63,6 +64,12 @@ export class HtmlPlugin extends BasePlugin {
           }
         } catch (error) {
           console.warn(`[HtmlPlugin] Failed to inline remote image: ${src}`, error);
+          recordRenderDiagnostic({
+            level: 'warning',
+            kind: 'resource-failed',
+            type: 'html',
+            message: `failed to inline remote image: ${src}`,
+          });
         }
         return;
       }
@@ -78,6 +85,12 @@ export class HtmlPlugin extends BasePlugin {
         img.setAttribute('src', `data:${mimeType};base64,${base64}`);
       } catch (error) {
         console.warn(`[HtmlPlugin] Failed to inline local image: ${src}`, error);
+        recordRenderDiagnostic({
+          level: 'warning',
+          kind: 'resource-failed',
+          type: 'html',
+          message: `failed to inline local image: ${src}`,
+        });
       }
     });
 
