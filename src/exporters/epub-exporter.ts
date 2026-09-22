@@ -607,6 +607,15 @@ export async function exportToEpub(options: ExportToEpubOptions): Promise<EpubEx
   const { title, filename: filenameOption, onProgress, signal } = options;
 
   try {
+    // Platforms that cannot read local files may need the user's help before
+    // the first image is embedded (see PlatformAPI.prepareLocalResourceAccess).
+    const proceed = await globalThis.platform?.prepareLocalResourceAccess?.();
+    if (proceed === false) {
+      // Dismissing the platform's prompt cancels the export; the flows treat
+      // this message as a silent user cancellation.
+      throw new Error('Download cancelled by user');
+    }
+
     const epubFilename = toEpubFilename(filenameOption || title);
 
     // 1. Reuse the current rendered DOM via the HTML export pipeline.
