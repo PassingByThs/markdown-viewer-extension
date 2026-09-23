@@ -30,7 +30,7 @@ import { replacePlaceholderWithImageUrl } from '../plugins/plugin-html-utils';
 import { recordRenderDiagnostic } from './render-diagnostics';
 import { syncBlockHtmlFromDOM } from './viewer/viewer-controller';
 import { generateContentHash, hashCode } from '../utils/hash';
-import { isDocumentRelativeUrl } from '../utils/document-url';
+import { sanitizeHtmlFragment } from '../utils/html-sanitizer.ts';
 import {
   splitMarkdownIntoBlocksWithLines as splitBlocks,
   splitMarkdownIntoBlocks as splitBlocksSimple,
@@ -195,146 +195,26 @@ export function renderFrontmatterAsRaw(block: string): string {
 }
 
 /**
- * Validate URL values and block javascript-style protocols
- * @param url - URL to validate
- * @returns True when URL is considered safe
+ * Validate URL values and block javascript-style protocols.
+ *
+ * The policy itself lives in src/utils/url-safety.ts, shared with the HTML
+ * block sanitizer so the two cannot drift into different ideas of what is
+ * dangerous; re-exported here because this module is its historical home.
  */
-export function isSafeUrl(url: string | null | undefined): boolean {
-  if (!url) return true;
-
-  const trimmed = url.trim();
-  if (!trimmed || trimmed.startsWith('#')) return true;
-
-  const lower = trimmed.toLowerCase();
-  if (lower.startsWith('javascript:') || lower.startsWith('vbscript:') || lower.startsWith('data:text/javascript')) {
-    return false;
-  }
-
-  if (lower.startsWith('data:')) {
-    return lower.startsWith('data:image/') || lower.startsWith('data:application/pdf');
-  }
-
-  // Allow document-relative URLs via shared URL policy.
-  if (isDocumentRelativeUrl(trimmed)) {
-    return true;
-  }
-
-  try {
-    const parsed = new URL(trimmed, document.baseURI);
-    return ['http:', 'https:', 'mailto:', 'tel:', 'file:'].includes(parsed.protocol);
-  } catch (error) {
-    // If URL parsing fails, it's likely a relative path - allow it
-    return true;
-  }
-}
+export { isSafeUrl, isSafeSrcset } from '../utils/url-safety';
 
 /**
- * Validate that every URL candidate in a srcset attribute is safe
- * @param value - Raw srcset value
- * @returns True when every entry is safe
- */
-export function isSafeSrcset(value: string | null | undefined): boolean {
-  if (!value) return true;
-  return value.split(',').every((candidate) => {
-    const urlPart = candidate.trim().split(/\s+/)[0];
-    return isSafeUrl(urlPart);
-  });
-}
-
-/**
- * Strip unsafe attributes from an element
- * @param element - Element to sanitize
- */
-function sanitizeElementAttributes(element: Element): void {
-  if (!element.hasAttributes()) return;
-
-  const urlAttributes = ['src', 'href', 'xlink:href', 'action', 'formaction', 'poster', 'data', 'srcset'];
-
-  Array.from(element.attributes).forEach((attr) => {
-    const attrName = attr.name.toLowerCase();
-
-    // Remove event handlers
-    if (attrName.startsWith('on')) {
-      element.removeAttribute(attr.name);
-      return;
-    }
-
-    // Validate URL attributes
-    if (urlAttributes.includes(attrName)) {
-      if (attrName === 'srcset') {
-        if (!isSafeSrcset(attr.value)) {
-          element.removeAttribute(attr.name);
-        }
-      } else if (attrName === 'href' || attrName === 'xlink:href') {
-        if (!isSafeUrl(attr.value)) {
-          element.removeAttribute(attr.name);
-        }
-      } else if (!isSafeUrl(attr.value)) {
-        element.removeAttribute(attr.name);
-      }
-    }
-  });
-}
-
-/**
- * Walk the node tree and remove dangerous elements/attributes
- * @param root - Root node to sanitize
- */
-function sanitizeNodeTree(root: DocumentFragment): void {
-  const blockedTags = new Set(['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'AUDIO', 'VIDEO']);
-  const stack: Element[] = [];
-
-  Array.from(root.childNodes).forEach((child) => {
-    if (child.nodeType === Node.ELEMENT_NODE) {
-      stack.push(child as Element);
-    } else if (child.nodeType === Node.COMMENT_NODE) {
-      child.remove();
-    }
-  });
-
-  while (stack.length > 0) {
-    const node = stack.pop()!;
-
-    if (node.nodeType !== Node.ELEMENT_NODE) continue;
-
-    const tagName = node.tagName ? node.tagName.toUpperCase() : '';
-    if (blockedTags.has(tagName)) {
-      const originalMarkup = node.outerHTML || `<${tagName.toLowerCase()}>`;
-      const truncatedMarkup = originalMarkup.length > 500 ? `${originalMarkup.slice(0, 500)}...` : originalMarkup;
-      const warning = document.createElement('pre');
-      warning.className = 'blocked-html-warning';
-      warning.setAttribute('style', 'background: #fee; border-left: 4px solid #f00; padding: 10px; font-size: 12px; white-space: pre-wrap;');
-      warning.textContent = `Blocked insecure <${tagName.toLowerCase()}> element removed.\n\n${truncatedMarkup}`;
-      node.replaceWith(warning);
-      continue;
-    }
-
-    sanitizeElementAttributes(node);
-
-    Array.from(node.childNodes).forEach((child) => {
-      if (child.nodeType === Node.ELEMENT_NODE) {
-        stack.push(child as Element);
-      } else if (child.nodeType === Node.COMMENT_NODE) {
-        child.remove();
-      }
-    });
-  }
-}
-
-/**
- * Sanitize rendered HTML to remove active content like scripts before injection
+ * Sanitize rendered HTML to remove active content like scripts before injection.
+ *
+ * Delegates to the shared sanitizer in src/utils/html-sanitizer.ts with the
+ * rendered-document policy: a visible notice replaces removed elements, and
+ * `<style>` is kept where diagrams need it (inside `<svg>`).
+ *
  * @param html - Raw HTML string produced by the markdown pipeline
  * @returns Sanitized HTML safe for innerHTML assignment
  */
 export function sanitizeRenderedHtml(html: string): string {
-  try {
-    const template = document.createElement('template');
-    template.innerHTML = html;
-    sanitizeNodeTree(template.content);
-    return template.innerHTML;
-  } catch (error) {
-    return html;
-  }
+  return sanitizeHtmlFragment(html, { reportBlocked: true });
 }
 
 /**

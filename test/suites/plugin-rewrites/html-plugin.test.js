@@ -1,62 +1,20 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert';
+import * as xml from 'xml';
 
 import { HtmlPlugin } from '../../../src/plugins/html-plugin.ts';
 
-class FakeImageElement {
-  constructor(container, originalTag) {
-    this.container = container;
-    this.originalTag = originalTag;
-  }
-
-  getAttribute(name) {
-    const match = this.originalTag.match(new RegExp(`${name}="([^"]*)"`, 'i'));
-    return match?.[1] ?? null;
-  }
-
-  setAttribute(name, value) {
-    const updatedTag = this.originalTag.replace(new RegExp(`${name}="([^"]*)"`, 'i'), `${name}="${value}"`);
-    this.container.replaceTag(this.originalTag, updatedTag);
-    this.originalTag = updatedTag;
-  }
-}
-
-class FakeContainerElement {
-  constructor() {
-    this.innerHTML = '';
-  }
-
-  querySelectorAll(selector) {
-    if (selector !== 'img[src]') {
-      return [];
-    }
-
-    const matches = this.innerHTML.match(/<img\b[^>]*\bsrc="[^"]*"[^>]*>/gi) || [];
-    return matches.map((tag) => new FakeImageElement(this, tag));
-  }
-
-  replaceTag(originalTag, updatedTag) {
-    this.innerHTML = this.innerHTML.replace(originalTag, updatedTag);
-  }
-}
-
-// HtmlPlugin reads the global `document`, so this file installs its own fake.
-// HtmlPlugin reads the global `document`, so it needs a fake installed while
-// its tests run. The fake is scoped to the suite (before/after) instead of the
-// module top level so the aggregate test/all.test.js import phase — where
-// mathjax etc. may probe `document` — and sibling suites (markdown-processor's
-// xml DOM) are never exposed to it.
+// HtmlPlugin touches the global `document`: it sanitizes the raw HTML a document
+// wrote and then inlines local images inside it. The suite installs a fibjs XML
+// DOM for its duration — a real parser, so the sanitizer's tree walk is actually
+// exercised — and restores whatever was there before. A regex-based fake cannot
+// stand in for it: sanitizing needs attributes, child nodes and template parsing.
 let previousDocument;
 
 describe('HtmlPlugin', () => {
   before(() => {
     previousDocument = globalThis.document;
-    globalThis.document = {
-      createElement(tagName) {
-        assert.strictEqual(tagName, 'div');
-        return new FakeContainerElement();
-      }
-    };
+    globalThis.document = new xml.Document('text/html');
   });
 
   after(() => {
@@ -64,10 +22,9 @@ describe('HtmlPlugin', () => {
     delete globalThis.platform;
   });
 
-  it('should inline local image src without rewriting html links', async () => {
-    const plugin = new HtmlPlugin();
+  /** Install the minimal platform the plugin reads (the document service). */
+  function installPlatform(options = {}) {
     const calls = [];
-
     globalThis.platform = {
       document: {
         resolvePath(input) {
@@ -75,18 +32,54 @@ describe('HtmlPlugin', () => {
           return `file:///workspace/${input.replace(/^\.\//, '')}`;
         },
         async readFile(input) {
-          assert.strictEqual(input, 'file:///workspace/images/pic.png');
+          calls.push(input);
+          if (options.failReads) throw new Error('Unable to read resource (404)');
           return 'ZmFrZQ==';
-        }
-      }
+        },
+      },
     };
+    return calls;
+  }
+
+  it('should inline local image src without rewriting html links', async () => {
+    const plugin = new HtmlPlugin();
+    const calls = installPlatform();
 
     const input = '<p><a href="./note.md">Doc</a><a href="#section">Section</a><img src="images/pic.png" alt="pic"></p>';
     const output = await plugin.preprocessContent(input);
 
-    assert.deepStrictEqual(calls, ['./images/pic.png']);
+    assert.deepStrictEqual(calls, ['./images/pic.png', 'file:///workspace/images/pic.png']);
     assert.ok(output.includes('href="./note.md"'), 'document-relative href should remain unchanged');
     assert.ok(output.includes('href="#section"'), 'fragment href should remain unchanged');
     assert.ok(output.includes('src="data:image/png;base64,ZmFrZQ=="'), 'image src should be inlined');
+  });
+
+  it('should sanitize the markup before it reaches the DOM', async () => {
+    // The plugin used to insert the raw document HTML into a live element (to
+    // find the images worth inlining), so `<img src=x onerror=…>` ran its
+    // handler as soon as the failing load reported back — before any sanitizer
+    // had seen the markup.
+    const plugin = new HtmlPlugin();
+    installPlatform({ failReads: true });
+
+    const output = await plugin.preprocessContent(
+      '<div class="box"><img src="./missing.png" onerror="console.error(1)"><script>console.error(1)</script></div>',
+    );
+
+    assert.doesNotMatch(output, /onerror/i, 'event handler attributes must be gone');
+    assert.doesNotMatch(output, /<script/i, 'script elements must be gone');
+    assert.match(output, /class="box"/, 'the harmless parts of the block are kept');
+  });
+
+  it('should drop javascript: URLs while keeping safe ones', async () => {
+    const plugin = new HtmlPlugin();
+    installPlatform();
+
+    const output = await plugin.preprocessContent(
+      '<p><a href="javascript:console.error(1)">bad</a><a href="https://example.com">good</a></p>',
+    );
+
+    assert.doesNotMatch(output, /javascript:/i);
+    assert.match(output, /href="https:\/\/example\.com"/);
   });
 });

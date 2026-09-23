@@ -4,7 +4,9 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
+import type { Browser, BrowserContext, Page } from 'playwright-core';
+
+import { launchBrowser, printPageToPdf } from '../../scripts/documd.js';
 
 const helperDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(helperDir, '..', '..');
@@ -191,12 +193,34 @@ async function sendFile(response: http.ServerResponse, filePath: string): Promis
   }
 }
 
+/**
+ * The page the contract suites render in — the CLI's page (see
+ * `rendererHtml` in scripts/documd.js) including its CSP, so the suites exercise
+ * the same policy the CLI ships: no inline scripts or handlers, inline styles
+ * and runtime-injected stylesheets allowed.
+ */
+const RENDERER_CSP = [
+  "default-src 'none'",
+  "script-src 'self' 'unsafe-eval'",
+  "style-src 'self' 'unsafe-inline' https:",
+  "img-src 'self' data: blob: http: https:",
+  "font-src 'self' data: https:",
+  "media-src 'self' data: blob:",
+  "connect-src 'self' data: blob: http: https:",
+  "frame-src 'self' data: blob:",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join('; ');
+
 function rendererHtml(basePath: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="${RENDERER_CSP}">
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="${basePath}/styles.css">
 </head>
@@ -430,6 +454,12 @@ export interface BrowserRenderHarness {
    * the same layout semantics as the live viewer.
    */
   measureHtmlLayout(inputPath: string, selectors: string[], overrides?: Partial<BrowserRenderRequest> & { timeoutMs?: number }): Promise<BrowserLayoutMeasurement[]>;
+  /**
+   * Run a function in the renderer page, bypassing the pipeline — for tests that
+   * have to put markup there *without* the sanitizer, e.g. to prove the page's
+   * CSP refuses to run it. Returns whatever the function returns.
+   */
+  evaluateInPage<T>(fn: () => T): Promise<T>;
   dispose(): Promise<void>;
 }
 
@@ -448,12 +478,7 @@ export async function createBrowserRenderHarness(options: { inputPath: string; c
   const documentDir = path.dirname(inputPath);
   const server = await startAssetServer(documentDir);
 
-  const browser: Browser = await chromium.launch({
-    headless: true,
-    ...(options.chromePath
-      ? { executablePath: path.resolve(options.chromePath) }
-      : { channel: 'chrome' }),
-  });
+  const browser: Browser = await launchBrowser({ chromePath: options.chromePath });
   const context: BrowserContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page: Page = await context.newPage();
   await page.goto(server.pageUrl, { waitUntil: 'load' });
@@ -469,6 +494,9 @@ export async function createBrowserRenderHarness(options: { inputPath: string; c
   return {
     consoleMessages() {
       return consoleMessages.slice();
+    },
+    evaluateInPage(fn) {
+      return withTimeout(page.evaluate(fn), 30_000);
     },
     async snapshotDom(targetPath: string, overrides = {}) {
       const resolved = path.resolve(targetPath);
@@ -709,7 +737,7 @@ export async function createBrowserRenderHarness(options: { inputPath: string; c
         fileReadUrl: server.fileReadUrl,
         resourceBaseUrl: server.resourceBaseUrl,
       }), timeoutMs);
-      return withTimeout(page.pdf({ printBackground: true, preferCSSPageSize: true }), timeoutMs);
+      return printPageToPdf(page, timeoutMs);
     },
     async renderBookPdf(pages: BookPageInput[], overrides = {}) {
       const resolved = path.resolve(overrides.inputPath || 'test/fixtures/layout/body-text.md');
@@ -735,7 +763,7 @@ export async function createBrowserRenderHarness(options: { inputPath: string; c
         fileReadUrl: server.fileReadUrl,
         resourceBaseUrl: server.resourceBaseUrl,
       }), timeoutMs);
-      return withTimeout(page.pdf({ printBackground: true, preferCSSPageSize: true }), timeoutMs);
+      return printPageToPdf(page, timeoutMs);
     },
     async renderBookDocx(pages: BookPageInput[], overrides = {}) {
       const resolved = path.resolve(overrides.inputPath || 'test/fixtures/layout/body-text.md');

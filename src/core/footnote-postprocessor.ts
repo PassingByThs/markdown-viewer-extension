@@ -1,5 +1,5 @@
 import type { Processor } from 'unified';
-import { normalizeMathBlocks, sanitizeRenderedHtml } from './markdown-processor';
+import { normalizeMathBlocks, sanitizeRenderedHtml, escapeHtml } from './markdown-processor';
 import { escapePipesInTableCodeSpans } from '../utils/markdown-table-code';
 import type { ParsedFootnotes, FootnoteDefinition } from './footnote-model.ts';
 
@@ -69,7 +69,10 @@ async function renderFootnoteContent(content: string, processor: Processor): Pro
 }
 
 function mergeLabelIntoFirstLine(label: string, contentHtml: string): string {
-  const labelHtml = `<span class="footnote-label">[${label}]</span>`;
+  // The label comes from the document (`[^label]:`) and may contain anything
+  // but `]` — quotes and angle brackets included — so it is escaped before it
+  // is interpolated into markup, exactly like the sanitized footnote body.
+  const labelHtml = `<span class="footnote-label">[${escapeHtml(label)}]</span>`;
   if (!contentHtml.trim()) {
     return `<p>${labelHtml}</p>`;
   }
@@ -98,7 +101,7 @@ export async function applyFootnotes(
   for (const def of footnotes.definitions) {
     const contentHtml = await renderFootnoteContent(def.content, processor);
     itemsHtml.push([
-      `  <li class="footnote-item" id="${def.anchorId}">`,
+      `  <li class="footnote-item" id="${escapeHtml(def.anchorId)}">`,
       `    <div class="footnote-content">${mergeLabelIntoFirstLine(def.label, contentHtml)}</div>`,
       '  </li>'
     ].join('\n'));

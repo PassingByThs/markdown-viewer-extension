@@ -32,7 +32,7 @@ const CLI_HOMEPAGE = 'https://docu.md';
 // Defaults in the help text are derived from the shared settings schema so
 // the CLI help can never drift from settings-schema.json.
 const HELP = `documd v${CLI_VERSION} — ${CLI_HOMEPAGE}
-Render Markdown / diagrams / books with headless Chrome
+Render Markdown / diagrams / books with headless Chromium
 
 Usage:
   documd <input> [<output>] [--format <f>] [options]
@@ -77,7 +77,8 @@ Options:
       --diagram-layout <mode> left or center (default: ${DEFAULT_RENDER_SETTINGS.diagramLayout})
       --merge-empty-cells   Merge empty Markdown table cells (default: on)
       --first-line-indent <n>  First-line indent in characters, 0-4 (default: ${DEFAULT_RENDER_SETTINGS.firstLineIndent})
-      --chrome <path>       Explicit Chrome executable path
+      --chrome <path>       Explicit Chrome/Chromium binary (DOCUMD_CHROME_PATH)
+      --browser-arg <flag>  Extra Chromium flag, repeatable (DOCUMD_CHROME_ARGS)
       --timeout <seconds>   Overall render timeout (default: 120)
   -v, --version             Print the version and exit
   -h, --help                Show this help
@@ -88,6 +89,17 @@ Website: ${CLI_HOMEPAGE}
 function takeValue(args, index, option) {
   const value = args[index + 1];
   if (!value || value.startsWith('-')) throw new Error(`${option} requires a value`);
+  return value;
+}
+
+/**
+ * Like takeValue, but for options whose value is itself a flag
+ * (`--browser-arg --disable-gpu`): here a leading dash is the value, not the
+ * start of the next option.
+ */
+function takeFlagValue(args, index, option) {
+  const value = args[index + 1];
+  if (!value) throw new Error(`${option} requires a value`);
   return value;
 }
 
@@ -153,6 +165,7 @@ export function parseArgs(args) {
     diagramLayout: DEFAULT_RENDER_SETTINGS.diagramLayout,
     tableMergeEmpty: DEFAULT_RENDER_SETTINGS.tableMergeEmpty,
     firstLineIndent: DEFAULT_RENDER_SETTINGS.firstLineIndent,
+    browserArgs: [],
     assetKind: 'all',
     failOnError: true,
     timeoutMs: 120_000,
@@ -218,6 +231,9 @@ export function parseArgs(args) {
       i += 1;
     } else if (arg === '--chrome') {
       options.chromePath = takeValue(args, i, arg);
+      i += 1;
+    } else if (arg === '--browser-arg') {
+      options.browserArgs.push(takeFlagValue(args, i, arg));
       i += 1;
     } else if (arg === '--timeout') {
       const seconds = Number(takeValue(args, i, arg));
@@ -460,12 +476,41 @@ async function sendFile(response, filePath) {
   }
 }
 
+/**
+ * The page every export renders in.
+ *
+ * The CSP is the second layer behind the HTML sanitizer, and the reason a gap in
+ * it cannot become code execution: `script-src 'self'` (with `'unsafe-eval'`,
+ * which diagram engines need) deliberately omits `'unsafe-inline'`, so an inline
+ * event handler or an inline `<script>` that reached the DOM anyway is refused
+ * by the browser — the document can inject markup, but never behaviour. Styles
+ * stay inline (`'unsafe-inline'`) because KaTeX/mermaid inject stylesheets at
+ * runtime, and remote stylesheets are allowed because the diagram engines fetch
+ * their fonts from a CDN (the sanitizer strips `@import` from document styles,
+ * so that allowance does not hand the document a remote-CSS channel).
+ */
+const RENDERER_CSP = [
+  "default-src 'none'",
+  "script-src 'self' 'unsafe-eval'",
+  "style-src 'self' 'unsafe-inline' https:",
+  "img-src 'self' data: blob: http: https:",
+  "font-src 'self' data: https:",
+  "media-src 'self' data: blob:",
+  "connect-src 'self' data: blob: http: https:",
+  "frame-src 'self' data: blob:",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join('; ');
+
 function rendererHtml(basePath) {
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="${RENDERER_CSP}">
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="${basePath}/styles.css">
 </head>
@@ -596,6 +641,204 @@ async function withTimeout(promise, timeoutMs) {
 }
 
 /**
+ * ── Browser launch ──────────────────────────────────────────────────────────
+ *
+ * Every export drives the same headless Chromium, so the launch lives here
+ * once and the export functions only ask for a browser.
+ *
+ * Which browser, in order: the Playwright-bundled Chromium (a headless build
+ * that needs no GUI session and no system install — the one that starts in
+ * containers and sandboxes), then the installed Chrome. `--chrome <path>`
+ * (or DOCUMD_CHROME_PATH) replaces both with one explicit binary.
+ *
+ * Sandbox: none. Chromium starts sandboxless (`--no-sandbox`), because its own
+ * sandbox cannot nest inside the environments documd runs in — macOS Seatbelt
+ * (boxsh), containers, root on Linux — where the kernel refuses to install it a
+ * second time (`deny forbidden-sandbox-reinit`) and the browser either aborts
+ * while starting ("GPU process isn't usable. Goodbye", "bootstrap_check_in ...
+ * Permission denied") or starts and then cannot draw a page
+ * ("browser.newPage: Target crashed"). Paying for a doomed attempt first would
+ * only delay every export there, so the browser starts sandboxless and the
+ * isolation is whatever the surrounding environment provides.
+ *
+ * Flags: DOCUMD_CHROME_ARGS (whitespace separated) first, then every
+ * --browser-arg.
+ */
+const CHROME_PATH_ENV = 'DOCUMD_CHROME_PATH';
+const CHROME_ARGS_ENV = 'DOCUMD_CHROME_ARGS';
+const NO_SANDBOX_FLAG = '--no-sandbox';
+/**
+ * Per-attempt budget for starting the browser. A browser that cannot start
+ * aborts at once; this only bounds one that hangs before it answers.
+ */
+const BROWSER_LAUNCH_TIMEOUT_MS = 60_000;
+
+/** `--chrome` wins over DOCUMD_CHROME_PATH; both replace the default browsers. */
+export function resolveChromePath(options, env = process.env) {
+  const requested = options.chromePath || env[CHROME_PATH_ENV];
+  return requested ? path.resolve(requested) : '';
+}
+
+/** Extra Chromium flags: DOCUMD_CHROME_ARGS first, then every --browser-arg. */
+export function extraBrowserArgs(options, env = process.env) {
+  const fromEnv = String(env[CHROME_ARGS_ENV] || '').trim();
+  return [
+    ...(fromEnv ? fromEnv.split(/\s+/) : []),
+    ...(options.browserArgs || []),
+  ];
+}
+
+/**
+ * Launch attempts for this run, in order, as `{ label, options }` pairs that go
+ * straight into `chromium.launch()`: one per candidate browser, each started
+ * headless and sandboxless. `chromiumSandbox` is deliberately never set —
+ * Playwright's default leaves Chromium's sandbox off, and documd passes
+ * `--no-sandbox` itself so the behaviour cannot drift with a Playwright update.
+ */
+export function browserLaunchPlan(options, env = process.env) {
+  const executablePath = resolveChromePath(options, env);
+  const args = extraBrowserArgs(options, env);
+  if (!args.includes(NO_SANDBOX_FLAG)) {
+    args.push(NO_SANDBOX_FLAG);
+  }
+  const browsers = executablePath
+    ? [{ label: executablePath, options: { executablePath } }]
+    : [
+      { label: 'bundled Chromium', options: {} },
+      { label: 'installed Chrome', options: { channel: 'chrome' } },
+    ];
+
+  return browsers.map((browser) => ({
+    label: browser.label,
+    options: { headless: true, timeout: BROWSER_LAUNCH_TIMEOUT_MS, args, ...browser.options },
+  }));
+}
+
+/** A browser that simply is not installed here — a normal fallback, not news. */
+const BROWSER_MISSING = /Executable doesn't exist|is not installed|playwright install|ENOENT/i;
+
+function firstLine(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split('\n').map((line) => line.trim()).find(Boolean) || 'unknown error';
+}
+
+/**
+ * A browser can start and still be unusable. Chromium's sandbox re-entering the
+ * kernel's (`deny forbidden-sandbox-reinit`) kills the renderer and helper
+ * processes: `chromium.launch()` succeeds and the browser keeps answering CDP,
+ * but the first page fails with "browser.newPage: Target crashed". Documd starts
+ * sandboxless so that does not happen, and this check turns any other broken
+ * browser into a clear error here instead of a crash three steps into an
+ * export — and is what makes the fallback to the next browser reachable.
+ */
+async function assertBrowserCanRender(browser) {
+  const page = await withTimeout(browser.newPage(), BROWSER_LAUNCH_TIMEOUT_MS);
+  try {
+    await withTimeout(
+      page.setContent('<!doctype html><title>documd browser check</title>'),
+      BROWSER_LAUNCH_TIMEOUT_MS,
+    );
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+/**
+ * Launch the first browser of the plan that starts *and renders*. A browser
+ * that cannot run here is explained on stderr before the next one is tried; one
+ * that is merely absent stays quiet, because falling back to the installed
+ * Chrome is the normal path for a CLI install.
+ *
+ * `launch` is injectable so the ladder can be tested without a browser.
+ */
+export async function launchBrowser(options, { launch = (launchOptions) => chromium.launch(launchOptions) } = {}) {
+  const attempts = browserLaunchPlan(options);
+  let lastError;
+  for (const [index, attempt] of attempts.entries()) {
+    const next = attempts[index + 1];
+    let browser;
+    let started = false;
+    try {
+      browser = await launch(attempt.options);
+      started = true;
+      await assertBrowserCanRender(browser);
+      return browser;
+    } catch (error) {
+      lastError = error;
+      // A browser that cannot render can also fail to close; the next attempt
+      // must not be held up by it.
+      await browser?.close().catch(() => {});
+      if (next && !BROWSER_MISSING.test(firstLine(error))) {
+        const stage = started ? 'started but cannot render' : 'failed to start';
+        console.warn(`documd: ${attempt.label} ${stage} (${firstLine(error)}); falling back to ${next.label}`);
+      }
+    }
+  }
+  throw new Error([
+    `Could not run a browser (tried ${attempts.map((attempt) => attempt.label).join(', ')}).`,
+    firstLine(lastError),
+    'Install the bundled browser ("npx playwright install chromium"), install Chrome, or pass --chrome <path>.',
+  ].join('\n'));
+}
+
+/**
+ * ── Printing ────────────────────────────────────────────────────────────────
+ *
+ * Playwright prints through the CDP *stream* transfer: Chromium writes the PDF
+ * into a temporary file in the OS user temp directory (NSTemporaryDirectory(),
+ * i.e. /private/var/folders/... on macOS — $TMPDIR is ignored there) and
+ * Playwright reads those bytes back with IO.read. That file is the only part
+ * of an export that needs write access to the *host* temp directory, which is
+ * exactly what a macOS Seatbelt sandbox (or a locked-down container) denies:
+ * rendering, HTML export and screenshots keep working while page.pdf() fails
+ * with "Protocol error (IO.read): Read failed".
+ *
+ * The same command can hand the document back inline over CDP instead
+ * (`transferMode: 'ReturnAsBase64'`), with the parameters Playwright itself
+ * sends so the printed document is identical; page.pdf() stays the fallback
+ * for a document large enough to hit the protocol's message size limit.
+ */
+const PLAYWRIGHT_PDF_OPTIONS = { printBackground: true, preferCSSPageSize: true };
+const PDF_PRINT_PARAMS = {
+  transferMode: 'ReturnAsBase64',
+  landscape: false,
+  displayHeaderFooter: false,
+  headerTemplate: '',
+  footerTemplate: '',
+  printBackground: true,
+  scale: 1,
+  paperWidth: 8.5,
+  paperHeight: 11,
+  marginTop: 0,
+  marginBottom: 0,
+  marginLeft: 0,
+  marginRight: 0,
+  pageRanges: '',
+  preferCSSPageSize: true,
+  generateTaggedPDF: false,
+  generateDocumentOutline: false,
+};
+
+/** Print the current page to PDF bytes (inline CDP transfer, page.pdf() fallback). */
+export async function printPageToPdf(page, timeoutMs) {
+  try {
+    const session = await page.context().newCDPSession(page);
+    try {
+      const result = await withTimeout(session.send('Page.printToPDF', PDF_PRINT_PARAMS), timeoutMs);
+      if (typeof result?.data === 'string' && result.data.length > 0) {
+        return Buffer.from(result.data, 'base64');
+      }
+      console.warn('documd: the browser returned no inline PDF data; printing through Playwright instead');
+    } finally {
+      await session.detach().catch(() => {});
+    }
+  } catch (error) {
+    console.warn(`documd: inline PDF transfer failed (${firstLine(error)}); printing through Playwright instead`);
+  }
+  return withTimeout(page.pdf(PLAYWRIGHT_PDF_OPTIONS), timeoutMs);
+}
+
+/**
  * Structured render diagnostics of the last render in this page (which engine
  * failed, on which markdown line, and why). The page records them next to the
  * console warnings it already prints, so a batch export can report failures
@@ -623,12 +866,7 @@ export async function renderMarkdownFile(options) {
   const server = await startAssetServer(path.dirname(inputPath));
   let browser;
   try {
-    browser = await chromium.launch({
-      headless: true,
-      ...(options.chromePath
-        ? { executablePath: path.resolve(options.chromePath) }
-        : { channel: 'chrome' }),
-    });
+    browser = await launchBrowser(options);
 
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const browserErrors = [];
@@ -687,12 +925,7 @@ export async function snapshotMarkdownFile(options) {
   const server = await startAssetServer(path.dirname(inputPath));
   let browser;
   try {
-    browser = await chromium.launch({
-      headless: true,
-      ...(options.chromePath
-        ? { executablePath: path.resolve(options.chromePath) }
-        : { channel: 'chrome' }),
-    });
+    browser = await launchBrowser(options);
 
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     await page.goto(server.pageUrl, { waitUntil: 'load' });
@@ -747,12 +980,7 @@ export async function exportMarkdownEpub(options) {
   const server = await startAssetServer(path.dirname(inputPath));
   let browser;
   try {
-    browser = await chromium.launch({
-      headless: true,
-      ...(options.chromePath
-        ? { executablePath: path.resolve(options.chromePath) }
-        : { channel: 'chrome' }),
-    });
+    browser = await launchBrowser(options);
 
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const browserErrors = [];
@@ -820,12 +1048,7 @@ export async function exportMarkdownDiagram(options) {
   const server = await startAssetServer(path.dirname(inputPath));
   let browser;
   try {
-    browser = await chromium.launch({
-      headless: true,
-      ...(options.chromePath
-        ? { executablePath: path.resolve(options.chromePath) }
-        : { channel: 'chrome' }),
-    });
+    browser = await launchBrowser(options);
 
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const browserErrors = [];
@@ -1037,12 +1260,7 @@ export async function exportMarkdownAssets(options) {
   const server = await startAssetServer(path.dirname(inputPath));
   let browser;
   try {
-    browser = await chromium.launch({
-      headless: true,
-      ...(options.chromePath
-        ? { executablePath: path.resolve(options.chromePath) }
-        : { channel: 'chrome' }),
-    });
+    browser = await launchBrowser(options);
 
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const browserErrors = [];
@@ -1128,12 +1346,7 @@ export async function exportMarkdownDocx(options) {
   const server = await startAssetServer(path.dirname(inputPath));
   let browser;
   try {
-    browser = await chromium.launch({
-      headless: true,
-      ...(options.chromePath
-        ? { executablePath: path.resolve(options.chromePath) }
-        : { channel: 'chrome' }),
-    });
+    browser = await launchBrowser(options);
 
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const browserErrors = [];
@@ -1202,12 +1415,7 @@ export async function exportMarkdownBook(options) {
   const server = await startAssetServer(summaryDir);
   let browser;
   try {
-    browser = await chromium.launch({
-      headless: true,
-      ...(options.chromePath
-        ? { executablePath: path.resolve(options.chromePath) }
-        : { channel: 'chrome' }),
-    });
+    browser = await launchBrowser(options);
 
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const browserErrors = [];
@@ -1264,19 +1472,12 @@ export async function exportMarkdownBook(options) {
   }
 }
 
-function pdfOptions() {
-  return {
-    printBackground: true,
-    preferCSSPageSize: true,
-  };
-}
-
 function doneMessage(action, outputPath) {
   return `${action} ${outputPath}`;
 }
 
 /**
- * Export a single markdown file to PDF through the headless Chrome print
+ * Export a single markdown file to PDF through the headless Chromium print
  * pipeline (shared print styles from print-utils).
  */
 export async function exportMarkdownPdf(options) {
@@ -1291,12 +1492,7 @@ export async function exportMarkdownPdf(options) {
   const server = await startAssetServer(path.dirname(inputPath));
   let browser;
   try {
-    browser = await chromium.launch({
-      headless: true,
-      ...(options.chromePath
-        ? { executablePath: path.resolve(options.chromePath) }
-        : { channel: 'chrome' }),
-    });
+    browser = await launchBrowser(options);
 
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const browserErrors = [];
@@ -1335,7 +1531,7 @@ export async function exportMarkdownPdf(options) {
       resourceBaseUrl: server.resourceBaseUrl,
     }), options.timeoutMs);
 
-    const pdf = await withTimeout(page.pdf(pdfOptions()), options.timeoutMs);
+    const pdf = await printPageToPdf(page, options.timeoutMs);
     await ensureOutputDirectory(outputPath);
     await fs.writeFile(outputPath, pdf);
     return { outputPath, browserErrors, diagnostics: await readPageDiagnostics(page) };
@@ -1347,7 +1543,7 @@ export async function exportMarkdownPdf(options) {
 
 /**
  * Whole-book PDF export: parse the SUMMARY.md pages, render the book into
- * #book-print-root and print it through headless Chrome.
+ * #book-print-root and print it through headless Chromium.
  */
 export async function exportMarkdownBookPdf(options) {
   const inputPath = path.resolve(options.input);
@@ -1366,12 +1562,7 @@ export async function exportMarkdownBookPdf(options) {
   const server = await startAssetServer(summaryDir);
   let browser;
   try {
-    browser = await chromium.launch({
-      headless: true,
-      ...(options.chromePath
-        ? { executablePath: path.resolve(options.chromePath) }
-        : { channel: 'chrome' }),
-    });
+    browser = await launchBrowser(options);
 
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const browserErrors = [];
@@ -1411,7 +1602,7 @@ export async function exportMarkdownBookPdf(options) {
       resourceBaseUrl: server.resourceBaseUrl,
     }), options.timeoutMs);
 
-    const pdf = await withTimeout(page.pdf(pdfOptions()), options.timeoutMs);
+    const pdf = await printPageToPdf(page, options.timeoutMs);
     const outputPath = options.output
       ? path.resolve(options.output)
       : path.join(summaryDir, `${bookTitle}.pdf`);

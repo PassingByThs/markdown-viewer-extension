@@ -1,8 +1,13 @@
 // Suite group: browser/CLI contract suites (fibjs test runner).
-// Need `npm run build:cli` (dist/cli assets) and Google Chrome.
+// Need `npm run build:cli` (dist/cli assets) and a browser: the CLI starts
+// Playwright's bundled Chromium and falls back to installed Chrome.
 import './cli.test.js';
+import './cli-browser-launch.test.js';
 import './cli-assets.test.ts';
 import './cli-assets-e2e.test.ts';
+import './cli-browser-e2e.test.ts';
+import './cli-html-injection-e2e.test.ts';
+import './renderer-page-csp.test.ts';
 import './host-css-scoping.test.js';
 import './browser-render-harness.test.ts';
 import './browser-baseline.test.ts';

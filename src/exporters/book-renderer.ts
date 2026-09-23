@@ -8,7 +8,7 @@
  * div; the caller prints the container with per-chapter page breaks.
  */
 
-import { AsyncTaskManager, createMarkdownProcessor } from '../core/markdown-processor';
+import { AsyncTaskManager, createMarkdownProcessor, sanitizeRenderedHtml } from '../core/markdown-processor';
 import { parseFootnotes } from '../core/footnote-model.ts';
 import { applyFootnotes } from '../core/footnote-postprocessor.ts';
 import { rewriteObsidianLinks } from '../utils/obsidian-link-rewrite';
@@ -102,7 +102,10 @@ export async function renderBookForPrint(options: RenderBookForPrintOptions): Pr
         const processor = createMarkdownProcessor(renderer, taskManager, translate, { tableMergeEmpty });
         const footnotes = parseFootnotes(rewriteObsidianLinks(processed));
         const file = await processor.process(footnotes.bodyMarkdown);
-        chapterContent.innerHTML = String(file);
+        // Sanitize before the chapter reaches the DOM: this is the book export
+        // path, which does not go through the block pipeline that sanitizes a
+        // single document's rendered HTML.
+        chapterContent.innerHTML = sanitizeRenderedHtml(String(file));
         await applyFootnotes(chapterContent, footnotes, processor);
         await taskManager.processAll();
       } catch (error) {
